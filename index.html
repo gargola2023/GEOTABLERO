@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GeoTablero</title>
+<meta name="description" content="Tableros de indicadores y gráficos sobre capas geoespaciales, con usuarios y perfiles por aplicación.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="css/estilos.css">
+</head>
+<body data-admin="0">
+<div class="app">
+  <header class="top">
+    <a class="brand brand-link" href="index.html"><h1>GeoTablero</h1></a>
+    <div class="spacer"></div>
+    <nav class="nav" id="nav" hidden>
+      <button id="navApps">Aplicaciones</button>
+      <button id="navUsers" class="admin-only">Usuarios</button>
+      <button id="navConns" class="admin-only">Conexiones</button>
+      <div class="who"><span class="avatar" id="whoAvatar"></span><span class="nm" id="whoName"></span><button id="btnLogout" title="Cerrar sesión">Salir</button></div>
+    </nav>
+  </header>
+
+  <main class="loading" id="vLoading">Cargando…</main>
+
+  <!-- Acceso -->
+  <main class="view-login" id="vLogin" hidden>
+    <form class="login-card" id="formLogin" autocomplete="on">
+      <div><h2>Entrar a GeoTablero</h2><p>Tableros de indicadores sobre capas geoespaciales.</p></div>
+      <label class="field"><span>Usuario</span><input type="text" id="loginUser" autocomplete="username" required></label>
+      <label class="field"><span>Contraseña</span><input type="password" id="loginPass" autocomplete="current-password" required></label>
+      <div class="err" id="loginErr"></div>
+      <button class="btn primary" type="submit" style="justify-content:center;padding:9px">Entrar</button>
+      <div class="demo" id="demoBox" hidden>
+        <span class="label">Cuentas de demostración</span>
+        <div class="demo-list" id="demoList"></div>
+        <div class="warn">Versión de demostración: usuarios y datos se guardan en este navegador y los permisos no son una barrera de seguridad real.</div>
+      </div>
+    </form>
+  </main>
+
+  <!-- Aplicaciones -->
+  <main class="view-page" id="vHome" hidden>
+    <div class="page">
+      <div class="page-head">
+        <div><h2>Aplicaciones</h2><p id="homeSub"></p></div>
+        <div class="acts admin-only"><button class="btn primary" id="btnNewApp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Nueva aplicación</button></div>
+      </div>
+      <div class="cards" id="appCards"></div>
+    </div>
+  </main>
+
+  <!-- Usuarios -->
+  <main class="view-page" id="vUsers" hidden>
+    <div class="page">
+      <div class="page-head">
+        <div><h2>Usuarios</h2><p>Los administradores ven y gestionan todo. Al resto se le asigna, en cada aplicación, el perfil de editor o de visualizador.</p></div>
+        <div class="acts"><button class="btn primary" id="btnNewUser"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Nuevo usuario</button></div>
+      </div>
+      <div class="table-wrap"><table class="list"><thead><tr><th>Usuario</th><th>Perfil</th><th>Acceso a aplicaciones</th><th></th></tr></thead><tbody id="userRows"></tbody></table></div>
+      <div class="backup">
+        <div><b>Publicar y respaldar</b><p>Exporta usuarios, aplicaciones y capas a <code>geotablero.json</code>. Si subes ese archivo a la carpeta <code>data/</code> del repositorio, quien abra el sitio por primera vez parte con esas aplicaciones.</p></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn" id="btnExport">Exportar</button>
+          <button class="btn" id="btnImport">Importar archivo</button>
+          <button class="btn" id="btnPublished">Cargar datos publicados</button>
+          <input type="file" id="importInput" accept=".json" hidden>
+        </div>
+      </div>
+    </div>
+  </main>
+  <!-- Conexiones a bases de datos -->
+  <main class="view-page" id="vConns" hidden>
+    <div class="page">
+      <div class="page-head">
+        <div><h2>Conexiones</h2><p>Bases de datos espaciales que los editores pueden usar como capas. PostGIS se conecta a través de Supabase, PostgREST, pg_featureserv (OGC API Features) o un WFS de GeoServer.</p></div>
+        <div class="acts"><button class="btn primary" id="btnNewConn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Nueva conexión</button></div>
+      </div>
+      <div class="table-wrap"><table class="list"><thead><tr><th>Nombre</th><th>Tipo</th><th>Dirección</th><th>Estado</th><th></th></tr></thead><tbody id="connRows"></tbody></table></div>
+      <div class="backup">
+        <div><b>Cómo exponer tu PostGIS</b><p><b>Supabase</b>: crea el proyecto, activa la extensión postgis, crea la tabla con su columna geometry en EPSG:4326 y usa la URL del proyecto con la clave pública. <b>PostgREST</b> o <b>pg_featureserv</b>: instálalos junto a tu PostgreSQL y habilita CORS. <b>GeoServer</b>: publica la tabla desde un almacén PostGIS y activa CORS o JSONP.</p></div>
+      </div>
+    </div>
+  </main>
+
+</div>
+
+<!-- Aplicación: crear / editar -->
+<dialog id="dlgApp">
+  <form method="dialog">
+    <div class="dlg-head"><h2 id="dlgAppTitle">Nueva aplicación</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="dlg-body">
+      <label class="field"><span>Nombre</span><input type="text" id="appName" placeholder="ej. Emergencias Campo de Hielo 2026"></label>
+      <label class="field"><span>Descripción</span><textarea id="appDesc" placeholder="Para qué sirve este tablero"></textarea></label>
+      <label class="field" id="appTplField"><span>Contenido inicial</span><select id="appTpl"></select></label>
+      <div class="err" id="appErr"></div>
+    </div>
+    <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnAppOk">Crear</button></div>
+  </form>
+</dialog>
+
+<!-- Accesos por aplicación -->
+<dialog id="dlgAccess">
+  <form method="dialog">
+    <div class="dlg-head"><h2 id="dlgAccessTitle">Accesos</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="dlg-body">
+      <p class="hint" style="margin:0"><b>Editor</b>: agrega y quita capas, dibuja, edita atributos y crea gráficos e indicadores. <b>Visualizador</b>: consulta el tablero sin modificarlo.</p>
+      <div class="access-list" id="accessList"></div>
+    </div>
+    <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnAccessOk">Guardar accesos</button></div>
+  </form>
+</dialog>
+
+<!-- Usuario: crear / editar -->
+<dialog id="dlgUser">
+  <form method="dialog">
+    <div class="dlg-head"><h2 id="dlgUserTitle">Nuevo usuario</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="dlg-body">
+      <label class="field"><span>Nombre completo</span><input type="text" id="uName"></label>
+      <div class="grid2">
+        <label class="field"><span>Usuario</span><input type="text" id="uLogin" autocomplete="off"></label>
+        <label class="field"><span id="uPassLabel">Contraseña</span><input type="password" id="uPass" autocomplete="new-password"></label>
+      </div>
+      <label class="check"><input type="checkbox" id="uAdmin"> Administrador (crea usuarios y aplicaciones, acceso total)</label>
+      <div id="uAccessWrap" class="pane">
+        <span class="label">Perfil en cada aplicación</span>
+        <div class="access-list" id="uAccessList"></div>
+      </div>
+      <div class="err" id="uErr"></div>
+    </div>
+    <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnUserOk">Guardar</button></div>
+  </form>
+</dialog>
+
+<!-- Conexión: crear / editar -->
+<dialog id="dlgConn">
+  <form method="dialog">
+    <div class="dlg-head"><h2 id="dlgConnTitle">Nueva conexión</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="dlg-body">
+      <div class="grid2">
+        <label class="field"><span>Nombre</span><input type="text" id="cnName" placeholder="ej. PostGIS emergencias"></label>
+        <label class="field"><span>Tipo</span><select id="cnType"></select></label>
+      </div>
+      <label class="field"><span>URL</span><input type="url" id="cnUrl"></label>
+      <label class="field" id="cnKeyField"><span id="cnKeyLabel">Clave</span><input type="text" id="cnKey" autocomplete="off" spellcheck="false"></label>
+      <label class="field" id="cnSchemaField"><span>Esquema (opcional, por defecto public)</span><input type="text" id="cnSchema" placeholder="public"></label>
+      <div class="hint" id="cnHelp"></div>
+      <div class="hint" id="cnResult" hidden></div>
+      <div class="err" id="cnErr"></div>
+    </div>
+    <div class="dlg-foot"><button class="btn" type="button" id="btnConnTest" style="margin-right:auto">Probar conexión</button><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnConnOk">Guardar</button></div>
+  </form>
+</dialog>
+
+<script src="js/comun.js"></script>
+<script src="js/basedatos.js"></script>
+<script src="js/portal.js"></script>
+</body>
+</html>

@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GeoTablero</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css">
+<link rel="stylesheet" href="css/estilos.css">
+</head>
+<body data-role="none" data-admin="0">
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <a class="brand-link" href="index.html" id="lnkHome"><h1>GeoTablero</h1></a>
+      <div class="crumb" id="crumb" hidden><span class="sep">/</span><strong id="crumbName"></strong><span class="role" id="crumbRole"></span></div>
+    </div>
+    <span class="coord" id="coord" hidden>WGS84 · —</span>
+    <div class="spacer"></div>
+    <span class="save-status" id="saveStatus" hidden></span>
+    <div class="app-tools" id="appTools" hidden>
+      <button class="btn can-edit" id="btnAddLayer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Capa</button>
+      <button class="btn can-edit design-btn" id="btnDesign" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>Diseñar</button>
+    </div>
+    <label class="toggle" id="extentWrap" hidden title="Calcular indicadores y gráficos solo con las entidades visibles en el mapa"><input type="checkbox" id="extentOnly"> Solo extensión visible</label>
+    <nav class="nav" id="nav" hidden>
+      <a href="index.html" id="lnkApps">Aplicaciones</a>
+      <div class="who"><span class="avatar" id="whoAvatar"></span><span class="nm" id="whoName"></span><button id="btnLogout" title="Cerrar sesión">Salir</button></div>
+    </nav>
+  </header>
+
+  <main class="loading" id="vLoading">Cargando aplicación…</main>
+
+  <main class="view-page" id="vDenied" hidden>
+    <div class="page"><div class="denied"><h2 id="deniedTitle"></h2><p id="deniedMsg"></p><div><a class="btn primary" href="index.html">Ir a mis aplicaciones</a></div></div></div>
+  </main>
+
+  <!-- Tablero: mapa a pantalla completa con widgets flotantes -->
+  <div class="stage" id="vApp" hidden>
+    <div id="map"></div>
+    <div id="widgets" aria-label="Widgets"></div>
+    <div class="edit-banner" id="editBanner" hidden><span class="dot"></span><span id="editBannerText"></span></div>
+    <div class="design-bar" id="designBar" hidden role="toolbar" aria-label="Agregar widgets">
+      <span class="label">Agregar</span>
+      <button class="btn" data-add="layers">Capas</button>
+      <button class="btn" data-add="basemaps">Mapa base</button>
+      <button class="btn" id="btnAddKpi">Indicador</button>
+      <button class="btn" id="btnAddChart">Gráfico</button>
+      <button class="btn" data-add="text">Texto</button>
+      <button class="btn" data-add="legend">Leyenda</button>
+      <span class="db-sep"></span>
+      <span class="db-hint">Arrastra la barra de un widget para moverlo y su esquina para cambiar el tamaño</span>
+      <button class="btn primary" id="btnDesignDone">Listo</button>
+    </div>
+  </div>
+</div>
+
+<!-- Widget de texto -->
+<dialog id="dlgText">
+  <form method="dialog">
+    <div class="dlg-head"><h2 id="dlgTextTitle">Nuevo widget de texto</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="dlg-body">
+      <label class="field"><span>Texto</span><textarea id="txBody" rows="4" placeholder="ej. Campo de Hielo Sur · Imagen WorldView 26-sep-2026"></textarea></label>
+      <span class="formats">Usa **doble asterisco** para negrita. Los saltos de línea se respetan.</span>
+      <div class="grid2">
+        <label class="field"><span>Tamaño</span><select id="txSize"><option value="s">Pequeño</option><option value="m">Normal</option><option value="l">Grande</option><option value="xl">Título</option></select></label>
+        <label class="field"><span>Alineación</span><select id="txAlign"><option value="left">Izquierda</option><option value="center">Centro</option><option value="right">Derecha</option></select></label>
+      </div>
+      <label class="check"><input type="checkbox" id="txHead"> Mostrar barra de título</label>
+      <label class="field"><span>Título de la barra (opcional)</span><input type="text" id="txTitle"></label>
+      <div class="err" id="txErr"></div>
+    </div>
+    <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnTextOk">Agregar</button></div>
+  </form>
+</dialog>
+
+<!-- Simbología vectorial -->
+<dialog id="dlgSym" class="dlg-side">
+  <form method="dialog">
+    <div class="dlg-head"><h2 id="symTitle">Simbología</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="dlg-body">
+      <div class="tabs" id="symModes" role="tablist">
+        <button type="button" role="tab" data-mode="single" aria-selected="true">Símbolo único</button>
+        <button type="button" role="tab" data-mode="categories" aria-selected="false">Por categorías</button>
+        <button type="button" role="tab" data-mode="ranges" aria-selected="false">Por rangos</button>
+      </div>
+      <div class="pane" id="symSingle">
+        <label class="field color-field"><span>Color</span><input type="color" id="syFill"></label>
+      </div>
+      <div class="pane" id="symThematic" hidden>
+        <div class="grid2">
+          <label class="field"><span>Campo</span><select id="syField"></select></label>
+          <label class="field"><span>Rampa de color</span><select id="syRamp"></select></label>
+        </div>
+        <div class="ramp-prev" id="syRampPrev" aria-hidden="true"></div>
+        <div class="grid2" id="syRangeOpts">
+          <label class="field"><span>Clases</span><select id="syClasses"></select></label>
+          <label class="field"><span>Método de clasificación</span><select id="syMethod"><option value="jenks">Cortes naturales (Jenks)</option><option value="quantile">Cuantiles</option><option value="equal">Intervalos iguales</option></select></label>
+        </div>
+        <label class="check"><input type="checkbox" id="syReverse"> Invertir el orden de los colores</label>
+        <div class="sym-classes" id="syClassList"></div>
+        <span class="formats">Haz clic en un color para cambiarlo.</span>
+      </div>
+      <fieldset class="sym-group">
+        <legend>Relleno, contorno y tamaño</legend>
+        <div class="grid2">
+          <label class="field" id="syFillOpField"><span>Opacidad del relleno <output id="syFillOpOut"></output></span><input type="range" id="syFillOp" min="0" max="1" step="0.05"></label>
+          <label class="field"><span>Grosor de línea <output id="syWeightOut"></output></span><input type="range" id="syWeight" min="0" max="8" step="0.5"></label>
+        </div>
+        <div class="grid2" id="syStrokeRow">
+          <label class="field color-field"><span>Color del contorno</span><input type="color" id="syStroke"></label>
+          <label class="check" style="align-self:end;padding-bottom:6px"><input type="checkbox" id="syStrokeSame"> Igual al relleno</label>
+        </div>
+        <div class="grid2">
+          <label class="field"><span>Tipo de línea</span><select id="syDash"></select></label>
+          <label class="field" id="syRadiusField"><span>Tamaño de punto <output id="syRadiusOut"></output></span><input type="range" id="syRadius" min="2" max="20" step="1"></label>
+        </div>
+      </fieldset>
+      <fieldset class="sym-group">
+        <legend>Etiquetas</legend>
+        <div class="grid2">
+          <label class="field"><span>Campo</span><select id="syLabel"></select></label>
+          <label class="field"><span>Tamaño</span><select id="syLabelSize"><option value="s">Pequeña</option><option value="m">Normal</option><option value="l">Grande</option></select></label>
+        </div>
+      </fieldset>
+    </div>
+    <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnSymOk">Aplicar</button></div>
+  </form>
+</dialog>
+
+<!-- Simbología de imágenes -->
+<dialog id="dlgRas" class="dlg-side">
+  <form method="dialog">
+    <div class="dlg-head"><h2 id="rasTitle">Simbología</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="dlg-body">
+      <fieldset class="sym-group" id="rsImage">
+        <legend>Renderizado del servicio de imágenes</legend>
+        <div class="hint" id="rsInfo"></div>
+        <label class="field"><span>Modo</span>
+          <select id="rsMode"><option value="default">Render del servidor</option><option value="stretch">Estirado de histograma</option><option value="ndvi">Índice NDVI</option><option value="fn">Función del servidor</option></select>
+        </label>
+        <div class="pane" id="rsBandsBox">
+          <label class="field"><span>Combinación de bandas (R, G, B)</span><select id="rsPreset"></select></label>
+          <div class="grid3" id="rsCustom">
+            <label class="field"><span>Rojo</span><select id="rsR"></select></label>
+            <label class="field"><span>Verde</span><select id="rsG"></select></label>
+            <label class="field"><span>Azul</span><select id="rsB"></select></label>
+          </div>
+        </div>
+        <div class="pane" id="rsStretchBox">
+          <label class="field"><span>Tipo de estirado</span><select id="rsSType"><option value="percent">Recorte por porcentaje</option><option value="stddev">Desviación estándar</option><option value="minmax">Mínimo – máximo</option></select></label>
+          <div class="grid2" id="rsPctBox">
+            <label class="field"><span>Recorte inferior (%)</span><input type="number" id="rsMin" min="0" max="20" step="0.1"></label>
+            <label class="field"><span>Recorte superior (%)</span><input type="number" id="rsMax" min="0" max="20" step="0.1"></label>
+          </div>
+          <label class="field" id="rsSdBox"><span>Número de desviaciones estándar</span><input type="number" id="rsSd" min="0.5" max="5" step="0.5"></label>
+          <label class="field"><span>Gamma <output id="rsGammaOut"></output></span><input type="range" id="rsGamma" min="0.3" max="3" step="0.1"></label>
+          <label class="check"><input type="checkbox" id="rsDra"> Recalcular con lo visible en pantalla (DRA)</label>
+        </div>
+        <div class="pane" id="rsNdviBox">
+          <div class="grid2">
+            <label class="field"><span>Banda roja</span><select id="rsRed"></select></label>
+            <label class="field"><span>Banda infrarroja cercana</span><select id="rsNir"></select></label>
+          </div>
+          <label class="field"><span>Paleta</span><select id="rsCmap"><option value="NDVI">NDVI</option><option value="NDVI2">NDVI 2</option><option value="NDVI3">NDVI 3</option></select></label>
+          <span class="formats">WorldView-2/3: roja 5, infrarroja 7. PlanetScope, SkySat y ortofotos RGBI: roja 3, infrarroja 4.</span>
+        </div>
+        <div class="pane" id="rsFnBox"><label class="field"><span>Función publicada en el servidor</span><select id="rsFn"></select></label></div>
+      </fieldset>
+      <fieldset class="sym-group">
+        <legend>Ajustes visuales</legend>
+        <label class="field"><span>Opacidad <output id="rsOpacityOut"></output></span><input type="range" id="rsOpacity" min="0" max="100" step="5"></label>
+        <div class="grid2">
+          <label class="field"><span>Brillo <output id="rsBrightOut"></output></span><input type="range" id="rsBright" min="30" max="200" step="5"></label>
+          <label class="field"><span>Contraste <output id="rsContrastOut"></output></span><input type="range" id="rsContrast" min="30" max="200" step="5"></label>
+          <label class="field"><span>Saturación <output id="rsSatOut"></output></span><input type="range" id="rsSat" min="0" max="250" step="5"></label>
+          <label class="field"><span>Escala de grises <output id="rsGrayOut"></output></span><input type="range" id="rsGray" min="0" max="100" step="5"></label>
+        </div>
+        <button class="btn" type="button" id="rsReset" style="align-self:flex-start">Restablecer ajustes</button>
+      </fieldset>
+    </div>
+    <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnRasOk">Aplicar</button></div>
+  </form>
+</dialog>
+
+<!-- Pregunta de texto -->
+<dialog id="dlgPrompt" style="width:min(400px,calc(100vw - 32px))">
+  <form method="dialog" id="formPrompt">
+    <div class="dlg-body"><label class="field"><span id="prTitle"></span><input type="text" id="prInput"></label></div>
+    <div class="dlg-foot"><button class="btn" value="cancel" type="button" onclick="this.closest('dialog').close('cancel')">Cancelar</button><button class="btn primary" type="submit">Guardar</button></div>
+  </form>
+</dialog>
+
+<!-- Agregar capa -->
+<dialog id="dlgLayer">
+  <form method="dialog">
+    <div class="dlg-head"><h2>Agregar capa</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="dlg-body">
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" data-tab="file" aria-selected="true">Archivo</button>
+        <button type="button" role="tab" data-tab="arcgis" aria-selected="false">ArcGIS Server</button>
+        <button type="button" role="tab" data-tab="db" aria-selected="false">Base de datos</button>
+        <button type="button" role="tab" data-tab="url" aria-selected="false">WMS / URL</button>
+        <button type="button" role="tab" data-tab="new" aria-selected="false">Capa nueva</button>
+      </div>
+      <div class="pane" data-pane="file">
+        <div class="drop" id="drop"></div>
+        <input type="file" id="fileInput" accept=".geojson,.json,.kml,.gpx,.zip,.csv" hidden>
+      </div>
+      <div class="pane" data-pane="arcgis" hidden>
+        <label class="field"><span>URL del servicio REST</span><input type="url" id="agsUrl" placeholder="https://servidor/arcgis/rest/services/carpeta/servicio/MapServer"></label>
+        <div class="grid2" style="align-items:end">
+          <label class="field"><span>Token (opcional)</span><input type="text" id="agsToken" placeholder="Solo si el servicio es privado"></label>
+          <button type="button" class="btn" id="btnAgsRead" style="justify-content:center;height:34px">Leer servicio</button>
+        </div>
+        <span class="formats">Acepta MapServer, FeatureServer e ImageServer, o una capa específica (…/MapServer/3).</span>
+        <div class="hint" id="agsInfo" hidden></div>
+        <label class="field" id="agsModeField" hidden><span>Cómo agregarlo</span><select id="agsMode"></select></label>
+        <label class="field" id="agsBandsField" hidden><span>Combinación de bandas (opcional, ej. 3,2,1 · numeradas desde 1)</span><input type="text" id="agsBands" placeholder="Vacío = la que define el servidor"></label>
+        <label class="field" id="agsWhereField" hidden><span>Filtro de atributos (WHERE)</span><input type="text" id="agsWhere" value="1=1"></label>
+      </div>
+      <div class="pane" data-pane="db" hidden>
+        <div class="hint" id="dbNoConn" hidden>Todavía no hay conexiones a bases de datos. Un administrador las crea en el portal, en <b>Conexiones</b> (Supabase, PostgREST, pg_featureserv o WFS de GeoServer sobre PostGIS).</div>
+        <div class="pane" id="dbFields">
+          <label class="field"><span>Conexión</span><select id="dbConn"></select></label>
+          <label class="field"><span>Tabla, vista o capa</span><select id="dbTable"></select></label>
+          <div class="hint" id="dbInfo" hidden></div>
+          <label class="field"><span>Filtro (opcional)</span><input type="text" id="dbFilter" spellcheck="false"></label>
+          <span class="formats" id="dbFilterHelp"></span>
+          <div class="grid2">
+            <label class="field"><span>Máximo de entidades</span><select id="dbMax"><option value="1000">1.000</option><option value="5000">5.000</option><option value="20000" selected>20.000</option></select></label>
+            <label class="field"><span>Actualizar automáticamente</span><select id="dbRefresh"><option value="0">No</option><option value="1">Cada 1 minuto</option><option value="5">Cada 5 minutos</option><option value="15">Cada 15 minutos</option><option value="60">Cada hora</option></select></label>
+          </div>
+          <label class="check" id="dbWriteRow"><input type="checkbox" id="dbWrite"> Guardar las ediciones en la base de datos (dibujar, mover, editar atributos y eliminar)</label>
+        </div>
+      </div>
+      <div class="pane" data-pane="url" hidden>
+        <label class="field"><span>Tipo de servicio</span>
+          <select id="urlType"><option value="geojson">GeoJSON (URL)</option><option value="wms">WMS</option><option value="xyz">Teselas XYZ</option></select>
+        </label>
+        <label class="field"><span>URL</span><input type="url" id="urlValue" placeholder="https://…"></label>
+        <label class="field" id="wmsLayersField" hidden><span>Capas WMS (parámetro LAYERS)</span><input type="text" id="wmsLayers" placeholder="ej. limite_comunal"></label>
+      </div>
+      <div class="pane" data-pane="new" hidden>
+        <div class="grid2">
+          <label class="field"><span>Geometría</span><select id="newGeom"><option value="Polygon">Polígono</option><option value="LineString">Línea</option><option value="Point">Punto</option></select></label>
+          <label class="field"><span>Color</span><select id="newColor"></select></label>
+        </div>
+        <label class="field"><span>Campos (separados por coma)</span><input type="text" id="newFields" value="nombre, tipo, valor"></label>
+      </div>
+      <label class="field"><span>Nombre de la capa</span><input type="text" id="layerName" placeholder="Se toma del archivo o servicio si lo dejas vacío"></label>
+      <label class="check" id="editableRow"><input type="checkbox" id="layerEditable"> Capa editable (permite dibujar y editar atributos)</label>
+      <div class="err" id="layerErr"></div>
+    </div>
+    <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnLayerOk">Agregar</button></div>
+  </form>
+</dialog>
+
+<!-- Gráfico -->
+<dialog id="dlgChart">
+  <form method="dialog">
+    <div class="dlg-head"><h2>Nuevo gráfico</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="dlg-body">
+      <div class="grid2">
+        <label class="field"><span>Capa</span><select id="chLayer"></select></label>
+        <label class="field"><span>Tipo</span>
+          <select id="chType"><option value="bar">Barras</option><option value="hbar">Barras horizontales</option><option value="doughnut">Anillo</option><option value="pie">Torta</option><option value="line">Línea</option><option value="hist">Histograma</option></select>
+        </label>
+      </div>
+      <label class="field" id="chCatField"><span>Agrupar por (categoría)</span><select id="chCat"></select></label>
+      <div class="grid2">
+        <label class="field"><span>Valor</span><select id="chVal"></select></label>
+        <label class="field" id="chAggField"><span>Operación</span>
+          <select id="chAgg"><option value="sum">Suma</option><option value="mean">Promedio</option><option value="count">Conteo</option><option value="min">Mínimo</option><option value="max">Máximo</option></select>
+        </label>
+      </div>
+      <label class="field"><span>Título</span><input type="text" id="chTitle" placeholder="Opcional"></label>
+      <div class="err" id="chErr"></div>
+    </div>
+    <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnChartOk">Crear gráfico</button></div>
+  </form>
+</dialog>
+
+<!-- Indicador -->
+<dialog id="dlgKpi">
+  <form method="dialog">
+    <div class="dlg-head"><h2>Nuevo indicador</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="dlg-body">
+      <label class="field"><span>Capa</span><select id="kLayer"></select></label>
+      <div class="grid2">
+        <label class="field"><span>Campo</span><select id="kField"></select></label>
+        <label class="field"><span>Estadístico</span>
+          <select id="kStat"><option value="sum">Suma</option><option value="mean">Promedio</option><option value="min">Mínimo</option><option value="max">Máximo</option><option value="count">Conteo</option></select>
+        </label>
+      </div>
+      <div class="grid2">
+        <label class="field"><span>Etiqueta</span><input type="text" id="kLabel" placeholder="Opcional"></label>
+        <label class="field"><span>Unidad</span><input type="text" id="kUnit" placeholder="ej. hab, ha"></label>
+      </div>
+      <div class="err" id="kErr"></div>
+    </div>
+    <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnKpiOk">Crear indicador</button></div>
+  </form>
+</dialog>
+
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
+<script src="https://unpkg.com/esri-leaflet@3.0.12/dist/esri-leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+<script src="https://unpkg.com/shpjs@4.0.4/dist/shp.min.js"></script>
+<script src="https://unpkg.com/@tmcw/togeojson@5.8.1/dist/togeojson.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="js/comun.js"></script>
+<script src="js/basedatos.js"></script>
+<script src="js/simbologia.js"></script>
+<script src="js/visor.js"></script>
+</body>
+</html>
