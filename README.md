@@ -9,7 +9,7 @@ Autor: Daniel González Baez — Ingeniero de Ejecución en Geomensura, Candidat
 - **Portal** (`index.html`): inicio de sesión, listado de aplicaciones y administración de usuarios.
 - **Página de cada aplicación** (`visor.html?app=ID`): mapa con capas, mapas base, dibujo, indicadores y gráficos. Cada aplicación tiene su propio enlace y se puede abrir en otra pestaña.
 - **Capas que se pueden agregar**:
-  - archivos GeoJSON, KML, GPX, Shapefile (.zip) y CSV con lat/lon;
+  - archivos Shapefile (.zip o sus partes), GeoPackage, File Geodatabase (.gdb comprimida o carpeta), GeoJSON, KML/KMZ, GPX y CSV con lat/lon;
   - servicios ArcGIS Server (MapServer, FeatureServer, ImageServer);
   - servicios WMS y teselas XYZ;
   - capas nuevas vacías para dibujar.
@@ -22,12 +22,14 @@ En la página de cada aplicación, el mapa ocupa toda la pantalla y el resto son
 
 | Widget | Contenido |
 |---|---|
-| Capas | Lista de capas con visibilidad, zoom, edición y opacidad (uno por aplicación) |
+| Capas | Lista de capas con visibilidad, zoom, orden, simbología, edición y opacidad (uno por aplicación). El orden se cambia arrastrando el asa ⋮⋮ de cada capa, con Subir y Bajar en el menú ⋯, o con las flechas ↑ ↓ sobre el asa. Las imágenes siempre se dibujan bajo las capas vectoriales. |
 | Mapa base | Selector de mapas base (uno por aplicación) |
 | Indicador | Un valor calculado: suma, promedio, mínimo, máximo o conteo de un campo |
 | Gráfico | Barras, barras horizontales, anillo, torta, línea o histograma |
 | Texto | Títulos, notas o fuentes, con negrita y alineación |
 | Leyenda | Simbología de las capas visibles (uno por aplicación) |
+| Coordenadas | Posición del cursor o de un punto fijado en SIRGAS-Chile 2025: grados decimales, GMS y UTM; copiar e ir a una coordenada escrita |
+| Imagen | Logos, fotos o gráficas de apoyo, subidas o por URL, con pie y enlace opcionales |
 
 Editores y administradores ven el botón **Diseñar**. En ese modo:
 
@@ -38,6 +40,100 @@ Editores y administradores ven el botón **Diseñar**. En ese modo:
 - Se agregan widgets desde la barra inferior.
 
 Cada widget queda anclado a la esquina más cercana, así que mantiene su lugar si cambia el tamaño de la ventana. La distribución se guarda por aplicación. Los visualizadores pueden minimizar y expandir widgets, pero no moverlos. En celulares, los widgets se muestran apilados debajo del mapa.
+
+## Importar y exportar en distintos sistemas de referencia
+
+GeoTablero usa **GDAL**, el mismo motor de lectura y escritura de QGIS y ArcGIS Pro, compilado para el navegador ([gdal3.js](https://github.com/bugra9/gdal3.js)). Se descarga desde cdn.jsdelivr.net la primera vez que se usa (unos 40 MB) y después queda en la caché del navegador.
+
+**Al agregar una capa** desde Shapefile, GeoPackage, File Geodatabase o un GeoJSON con sistema propio, la app:
+
+1. lista las capas con geometría y muestra el sistema de referencia que trae cada una, con su código EPSG (por ejemplo, *PSAD56 / UTM 19S · EPSG 24879*);
+2. si el archivo no indica sistema (un Shapefile sin `.prj`), propone uno según sus coordenadas y te deja elegirlo;
+3. transforma las coordenadas a WGS84 para mostrarlas en el mapa, aplicando el traslado de datum oficial cuando corresponde (PSAD56 y SAD69).
+
+**File Geodatabase**: comprime la carpeta `.gdb` en un `.zip` o usa **Elegir una carpeta .gdb**. Se pueden elegir varias capas a la vez.
+
+**Al descargar una capa** (menú ⋯ → Descargar):
+
+| Formato | Notas |
+|---|---|
+| Shapefile (.zip) | `.shp`, `.dbf`, `.shx`, `.prj` y `.cpg` (UTF-8). Una capa por tipo de geometría si están mezcladas |
+| GeoPackage | Un solo archivo `.gpkg` |
+| File Geodatabase (.gdb.zip) | Carpeta `.gdb` comprimida, lista para ArcGIS. Una capa por tipo de geometría |
+| GeoJSON | En WGS84 sigue el estándar actual; en otro sistema incluye la definición `crs` |
+| KMZ | Para Google Earth, siempre en WGS84. Conserva los colores de la simbología |
+
+Sistemas disponibles para descargar:
+
+- SIRGAS-Chile 2025 (UTM 19S, 18S, 12S y geográficas);
+- WGS84 (geográficas, UTM 19S, 18S, 17S y 12S, y Web Mercator);
+- SIRGAS-Chile 2021, 2016, 2013 y 2002, y SIRGAS 2000;
+- PSAD56 y SAD69 en UTM 17S, 18S y 19S.
+
+Por defecto se propone el sistema original de la capa o, si no se conoce, SIRGAS-Chile 2025 en la zona UTM que corresponde. Las transformaciones se verificaron contra PROJ (pyproj) y coinciden al milímetro.
+
+## Borrador, publicación y compartir
+
+**Borrador y publicación**: lo que cambian editores y administradores no se publica solo.
+
+- **Guardar borrador** (o `Ctrl + S`) guarda los cambios sin que los vean los visualizadores.
+- **Publicar** hace visible la versión actual para todas las personas con acceso.
+- El botón ↺ descarta el borrador y vuelve a la versión publicada.
+- Al salir con cambios sin guardar, la aplicación pregunta si guardarlos como borrador.
+- En el portal, la tarjeta marca **Borrador sin publicar** cuando corresponde.
+- Las ediciones que se guardan en una base de datos (Supabase o PostgREST) quedan en la base de inmediato, igual que antes.
+
+**Compartir** (administradores y creador de la aplicación), desde la tarjeta o desde la cabecera:
+
+| Nivel | Quién la ve |
+|---|---|
+| Privada | Su creador, los administradores y quienes tengan un perfil asignado en Accesos |
+| Organización | Cualquier usuario con cuenta en GeoTablero, como visualizador. Los editores se siguen asignando en Accesos |
+| Pública | Cualquier persona con el enlace, sin iniciar sesión. También aparece en la pantalla de acceso |
+
+## Personalizar el diseño
+
+En modo **Diseñar**:
+
+- **Tema** de la aplicación:
+  - temas listos (Verde, Azul institucional, Grafito, Arena, Emergencia y Noche) o un color principal propio;
+  - cabecera clara, de color u oscura;
+  - esquinas, widgets translúcidos y modo oscuro;
+  - el nombre visible en la cabecera.
+- **Apariencia** de cada widget (ícono de pincel):
+  - título, fondo y opacidad, color de texto y barra de título de color;
+  - borde, sombra y esquinas.
+- **Indicadores**:
+  - número completo (3.647.764), en millones o abreviado, con los decimales que elijas;
+  - prefijo y sufijo;
+  - texto bajo el número (ninguno, el detalle del cálculo o un texto propio);
+  - tamaño, alineación y color del número. El número se ajusta solo al ancho del widget.
+- **Gráficos**:
+  - colores automáticos, un solo color, una rampa o los colores de la simbología de la capa;
+  - orden, cantidad de categorías (con "Otros") y etiquetas de valor;
+  - leyenda, cuadrícula y detalle del cálculo bajo el título.
+
+## Coordenadas
+
+Todas las coordenadas se muestran en **SIRGAS-Chile 2025**, la Red Geodésica Nacional del IGM (época de referencia 2025.0, elipsoide GRS 1980).
+
+En la cabecera, el recuadro de coordenadas muestra la posición del cursor. Al hacer clic se elige el formato:
+
+| Formato | EPSG |
+|---|---|
+| Grados decimales | 11473 |
+| Grados, minutos y segundos | 11473 |
+| UTM | 11474 (zona 12S, Rapa Nui), 11475 (18S) y 11476 (19S) |
+
+La zona UTM se calcula sola.
+
+El widget **Coordenadas**:
+- muestra los tres formatos a la vez;
+- fija un punto con un clic;
+- copia cada formato;
+- **va a una coordenada escrita**, por ejemplo `-33.4489, -70.6693`, `33°26′56″S 70°40′09″O` o `19S 346512 6297123`. Si la coordenada UTM no trae zona, se usa la que elijas.
+
+Los mapas base y la mayoría de los servicios web entregan sus datos en WGS84 / Web Mercator. GeoTablero los toma como coincidentes con SIRGAS-Chile 2025, porque la diferencia es de pocos centímetros, menor que la precisión de un visor web. Para levantamientos precisos usa las herramientas del IGM. Los cálculos UTM se verificaron con PROJ (pyproj) y coinciden al milímetro.
 
 ## Simbología
 
@@ -197,9 +293,11 @@ js/portal.js      Lógica del portal
 js/visor.js       Mapa, capas, widgets, dibujo, indicadores y gráficos
 js/basedatos.js   Conexiones a PostGIS (Supabase, PostgREST, OGC API, WFS)
 js/simbologia.js  Rampas de color, clasificación y reglas de renderizado de imágenes
+js/coordenadas.js Proyección UTM en SIRGAS-Chile 2025
+js/gdalio.js      Importar y exportar Shapefile, GeoPackage, File Geodatabase, KMZ y GeoJSON con GDAL, GMS y lectura de coordenadas
 data/             Aquí va geotablero.json si quieres publicar datos
 ```
 
 ## Librerías
 
-[Leaflet](https://leafletjs.com) · [Leaflet-Geoman](https://geoman.io) · [Esri Leaflet](https://developers.arcgis.com/esri-leaflet/) · [Chart.js](https://www.chartjs.org) · [Turf.js](https://turfjs.org) · [shpjs](https://github.com/calvinmetcalf/shapefile-js) · [togeojson](https://github.com/placemark/togeojson) · [Papa Parse](https://www.papaparse.com). Se cargan desde CDN, así que no hay que instalar nada.
+[Leaflet](https://leafletjs.com) · [Leaflet-Geoman](https://geoman.io) · [Esri Leaflet](https://developers.arcgis.com/esri-leaflet/) · [Chart.js](https://www.chartjs.org) · [Turf.js](https://turfjs.org) · [shpjs](https://github.com/calvinmetcalf/shapefile-js) · [togeojson](https://github.com/placemark/togeojson) · [Papa Parse](https://www.papaparse.com) · [gdal3.js](https://github.com/bugra9/gdal3.js) · [JSZip](https://stuk.github.io/jszip/). Se cargan desde CDN, así que no hay que instalar nada.

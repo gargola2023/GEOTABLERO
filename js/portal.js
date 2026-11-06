@@ -30,7 +30,14 @@ DEMO.forEach(d => {
   $('#demoList').append(el('button', { type:'button', onclick:() => { $('#loginUser').value = d.login; $('#loginPass').value = d.pass; $('#loginPass').focus(); } },
     el('span', {}, `${d.login} / ${d.pass}`), el('span', { class:'role ' + r }, ROLE_NAME[r])));
 });
+function renderPublicApps(){
+  const box = $('#publicApps'), list = $('#publicList');
+  const pub = S.apps.filter(a => shareOf(a) === 'public').sort((a, b) => (b.publishedAt || 0) - (a.publishedAt || 0));
+  box.hidden = !pub.length; list.innerHTML = '';
+  pub.forEach(a => list.append(el('a', { class:'pub-app', href: appUrl(a.id) }, el('b', {}, a.name), el('span', {}, a.description || 'Abrir sin iniciar sesión'))));
+}
 function showLogin(){
+  renderPublicApps();
   $('#demoBox').hidden = !S.users.some(u => u.demo);
   show('vLogin'); setTimeout(() => $('#loginUser').focus(), 0);
 }
@@ -81,17 +88,21 @@ function renderHome(){
     const r = roleFor(S.me, a), canvas = el('canvas'), url = appUrl(a.id);
     const nAccess = Object.keys(a.access || {}).length, s = a.stats || { layers:0, charts:0, kpis:0 };
     box.append(el('article', { class:'card' },
-      el('a', { class:'mapthumb', href:url, 'aria-label':`Abrir ${a.name}` }, canvas, el('span', { class:'role ' + r }, ROLE_NAME[r])),
+      el('a', { class:'mapthumb', href:url, 'aria-label':`Abrir ${a.name}` }, canvas,
+        el('span', { class:'card-badges' }, el('span', { class:'role ' + r }, ROLE_NAME[r]),
+          el('span', { class:'share-badge share-' + shareOf(a), title: SHARE[shareOf(a)].desc }, SHARE[shareOf(a)].name),
+          r !== 'viewer' && a.draftAt && (!a.publishedAt || a.draftAt > a.publishedAt) ? el('span', { class:'draft-badge', title:`Borrador guardado ${fmtDate(a.draftAt)}` }, 'Borrador sin publicar') : null)),
       el('div', { class:'body' },
         el('h3', {}, a.name),
         el('div', { class:'desc' }, a.description || ''),
         el('div', { class:'stats' }, el('span', {}, `${s.layers} capas`), el('span', {}, `${s.kpis} indicadores`), el('span', {}, `${s.charts} gráficos`), isAdmin() ? el('span', {}, `${nAccess} usuario${nAccess === 1 ? '' : 's'}`) : null),
-        el('div', { class:'stats', style:'padding-top:0' }, `Actualizada ${fmtDate(a.updatedAt)}`)),
+        el('div', { class:'stats', style:'padding-top:0' }, a.publishedAt ? `Publicada ${fmtDate(a.publishedAt)}` : `Actualizada ${fmtDate(a.updatedAt)}`)),
       el('div', { class:'foot' },
         el('a', { class:'btn primary', href:url }, 'Abrir'),
         el('span', { class:'spacer' }),
         el('button', { class:'icon-btn', title:'Copiar enlace de la aplicación', 'aria-label':'Copiar enlace', onclick:() => copyText(new URL(url, location.href).href) }, svg(ICON.link)),
-        isAdmin() ? el('button', { class:'icon-btn', title:'Accesos', 'aria-label':'Accesos', onclick:() => openAccess(a) }, svg(ICON.users)) : null,
+        canShare(S.me, a) ? el('button', { class:'icon-btn', title:'Compartir', 'aria-label':'Compartir', onclick:() => openShareDialog(a, () => renderHome()) }, svg(ICON.share)) : null,
+        isAdmin() ? el('button', { class:'icon-btn', title:'Accesos por usuario', 'aria-label':'Accesos', onclick:() => openAccess(a) }, svg(ICON.users)) : null,
         isAdmin() ? el('button', { class:'icon-btn', title:'Editar nombre y descripción', 'aria-label':'Editar', onclick:() => openAppDialog(a) }, svg(ICON.edit)) : null,
         isAdmin() ? el('button', { class:'icon-btn', title:'Duplicar', 'aria-label':'Duplicar', onclick:() => duplicateApp(a) }, svg(ICON.copy)) : null,
         isAdmin() ? el('button', { class:'icon-btn', title:'Eliminar', 'aria-label':'Eliminar', onclick:() => deleteApp(a) }, svg(ICON.trash)) : null)));
@@ -122,21 +133,22 @@ $('#btnAppOk').addEventListener('click', async () => {
   const tpl = $('#appTpl').value;
   let st = tpl === 'sample' ? sampleState() : emptyState();
   if (tpl.startsWith('copy:')) st = structuredClone((await DB.get('app:' + tpl.slice(5))) || emptyState());
-  const a = { id: nid('A'), name, description: desc, createdBy: S.me.id, createdAt: Date.now(), updatedAt: Date.now(), access:{}, stats: statsOf(st), thumb: thumbData(st) };
+  const now = Date.now();
+  const a = { id: nid('A'), name, description: desc, createdBy: S.me.id, createdAt: now, updatedAt: now, publishedAt: now, share:'private', access:{}, stats: statsOf(st), thumb: thumbData(st) };
   await reloadStore(); S.apps.push(a);
   await DB.set('app:' + a.id, st); await saveApps();
   dlgApp.close(); renderHome(); toast('Aplicación creada. Asígnale usuarios con el ícono de accesos.');
 });
 async function duplicateApp(a){
   const st = structuredClone((await DB.get('app:' + a.id)) || emptyState());
-  const c = { ...structuredClone(a), id: nid('A'), name: a.name + ' (copia)', createdBy: S.me.id, createdAt: Date.now(), updatedAt: Date.now() };
+  const c = { ...structuredClone(a), id: nid('A'), name: a.name + ' (copia)', createdBy: S.me.id, createdAt: Date.now(), updatedAt: Date.now(), publishedAt: Date.now(), draftAt: null, share:'private' };
   await reloadStore(); S.apps.push(c);
   await DB.set('app:' + c.id, st); await saveApps(); renderHome(); toast('Aplicación duplicada con los mismos accesos');
 }
 async function deleteApp(a){
   if (!await confirmAsk(`Eliminar "${a.name}"`, 'Se borran sus capas, indicadores y gráficos, y su enlace dejará de funcionar. Esta acción no se puede deshacer.', 'Eliminar')) return;
   await reloadStore(); S.apps = S.apps.filter(x => x.id !== a.id);
-  await DB.del('app:' + a.id); await saveApps(); renderHome(); toast('Aplicación eliminada');
+  await DB.del('app:' + a.id); await DB.del('draft:' + a.id); await saveApps(); renderHome(); toast('Aplicación eliminada');
 }
 
 /* ---------- Accesos de una aplicación ---------- */

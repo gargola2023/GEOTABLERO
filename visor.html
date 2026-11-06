@@ -18,16 +18,22 @@
       <a class="brand-link" href="index.html" id="lnkHome"><h1>GeoTablero</h1></a>
       <div class="crumb" id="crumb" hidden><span class="sep">/</span><strong id="crumbName"></strong><span class="role" id="crumbRole"></span></div>
     </div>
-    <span class="coord" id="coord" hidden>WGS84 · —</span>
+    <button class="coord" id="coord" type="button" hidden title="Cambiar el formato de las coordenadas"><span class="coord-fmt" id="coordFmt">Decimal</span><span id="coordVal">—</span></button>
     <div class="spacer"></div>
     <span class="save-status" id="saveStatus" hidden></span>
     <div class="app-tools" id="appTools" hidden>
       <button class="btn can-edit" id="btnAddLayer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Capa</button>
       <button class="btn can-edit design-btn" id="btnDesign" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>Diseñar</button>
+      <span class="pub-state" id="pubState"></span>
+      <button class="icon-btn" id="btnDiscard" type="button" title="Descartar borrador y volver a la versión publicada" aria-label="Descartar borrador" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 109-9 9.7 9.7 0 00-6.7 2.8L3 8"/><path d="M3 3v5h5"/></svg></button>
+      <button class="btn" id="btnSaveDraft" type="button" disabled title="Ctrl + S">Guardar borrador</button>
+      <button class="btn primary" id="btnPublish" type="button" disabled>Publicar</button>
     </div>
-    <label class="toggle" id="extentWrap" hidden title="Calcular indicadores y gráficos solo con las entidades visibles en el mapa"><input type="checkbox" id="extentOnly"> Solo extensión visible</label>
+    <label class="toggle" id="extentWrap" hidden title="Calcular indicadores y gráficos solo con las entidades visibles en el mapa"><input type="checkbox" id="extentOnly"> <span class="tg-long">Solo extensión visible</span><span class="tg-short">Extensión</span></label>
+    <button class="btn" id="btnShare" type="button" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg><span class="btn-txt">Compartir</span></button>
     <nav class="nav" id="nav" hidden>
       <a href="index.html" id="lnkApps">Aplicaciones</a>
+      <a href="index.html" id="lnkLogin" class="btn primary" hidden>Entrar</a>
       <div class="who"><span class="avatar" id="whoAvatar"></span><span class="nm" id="whoName"></span><button id="btnLogout" title="Cerrar sesión">Salir</button></div>
     </nav>
   </header>
@@ -51,7 +57,10 @@
       <button class="btn" id="btnAddChart">Gráfico</button>
       <button class="btn" data-add="text">Texto</button>
       <button class="btn" data-add="legend">Leyenda</button>
+      <button class="btn" data-add="coords">Coordenadas</button>
+      <button class="btn" data-add="image">Imagen</button>
       <span class="db-sep"></span>
+      <button class="btn" id="btnTheme" type="button">Tema</button>
       <span class="db-hint">Arrastra la barra de un widget para moverlo y su esquina para cambiar el tamaño</span>
       <button class="btn primary" id="btnDesignDone">Listo</button>
     </div>
@@ -194,6 +203,22 @@
   </form>
 </dialog>
 
+<!-- Descargar capa -->
+<dialog id="dlgExport">
+  <form method="dialog">
+    <div class="dlg-head"><h2 id="exTitle">Descargar capa</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="dlg-body">
+      <label class="field"><span>Formato</span><select id="exFormat"></select></label>
+      <label class="field"><span>Sistema de referencia</span><select id="exCrs"></select></label>
+      <div class="hint" id="exHint"></div>
+      <label class="field"><span>Nombre del archivo</span><input type="text" id="exName"></label>
+      <label class="check" id="exStyleRow"><input type="checkbox" id="exStyle" checked> Incluir colores de la simbología (KMZ)</label>
+      <div class="err" id="exErr"></div>
+    </div>
+    <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnExportOk">Descargar</button></div>
+  </form>
+</dialog>
+
 <!-- Agregar capa -->
 <dialog id="dlgLayer">
   <form method="dialog">
@@ -207,8 +232,11 @@
         <button type="button" role="tab" data-tab="new" aria-selected="false">Capa nueva</button>
       </div>
       <div class="pane" data-pane="file">
-        <div class="drop" id="drop"></div>
-        <input type="file" id="fileInput" accept=".geojson,.json,.kml,.gpx,.zip,.csv" hidden>
+        <div class="drop" id="drop" tabindex="0" role="button"></div>
+        <input type="file" id="fileInput" accept=".geojson,.json,.kml,.kmz,.gpx,.zip,.csv,.gpkg,.shp,.dbf,.shx,.prj,.cpg" multiple hidden>
+        <input type="file" id="folderInput" webkitdirectory hidden>
+        <button type="button" class="btn" id="btnPickFolder" style="align-self:flex-start">Elegir una carpeta .gdb</button>
+        <div class="imp-analysis" id="impAnalysis" hidden></div>
       </div>
       <div class="pane" data-pane="arcgis" hidden>
         <label class="field"><span>URL del servicio REST</span><input type="url" id="agsUrl" placeholder="https://servidor/arcgis/rest/services/carpeta/servicio/MapServer"></label>
@@ -260,24 +288,45 @@
 </dialog>
 
 <!-- Gráfico -->
-<dialog id="dlgChart">
+<dialog id="dlgChart" class="dlg-wide">
   <form method="dialog">
     <div class="dlg-head"><h2>Nuevo gráfico</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     <div class="dlg-body">
-      <div class="grid2">
-        <label class="field"><span>Capa</span><select id="chLayer"></select></label>
-        <label class="field"><span>Tipo</span>
-          <select id="chType"><option value="bar">Barras</option><option value="hbar">Barras horizontales</option><option value="doughnut">Anillo</option><option value="pie">Torta</option><option value="line">Línea</option><option value="hist">Histograma</option></select>
-        </label>
-      </div>
-      <label class="field" id="chCatField"><span>Agrupar por (categoría)</span><select id="chCat"></select></label>
-      <div class="grid2">
-        <label class="field"><span>Valor</span><select id="chVal"></select></label>
-        <label class="field" id="chAggField"><span>Operación</span>
-          <select id="chAgg"><option value="sum">Suma</option><option value="mean">Promedio</option><option value="count">Conteo</option><option value="min">Mínimo</option><option value="max">Máximo</option></select>
-        </label>
-      </div>
-      <label class="field"><span>Título</span><input type="text" id="chTitle" placeholder="Opcional"></label>
+      <fieldset class="sym-group"><legend>Datos</legend>
+        <div class="grid2">
+          <label class="field"><span>Capa</span><select id="chLayer"></select></label>
+          <label class="field"><span>Tipo</span>
+            <select id="chType"><option value="bar">Barras</option><option value="hbar">Barras horizontales</option><option value="doughnut">Anillo</option><option value="pie">Torta</option><option value="line">Línea</option><option value="hist">Histograma</option></select>
+          </label>
+        </div>
+        <label class="field" id="chCatField"><span>Agrupar por (categoría)</span><select id="chCat"></select></label>
+        <div class="grid2">
+          <label class="field"><span>Valor</span><select id="chVal"></select></label>
+          <label class="field" id="chAggField"><span>Operación</span>
+            <select id="chAgg"><option value="sum">Suma</option><option value="mean">Promedio</option><option value="count">Conteo</option><option value="min">Mínimo</option><option value="max">Máximo</option></select>
+          </label>
+        </div>
+        <div class="grid2" id="chOrderRow">
+          <label class="field"><span>Orden</span><select id="chSort"><option value="desc">Mayor a menor</option><option value="asc">Menor a mayor</option><option value="alpha">Alfabético</option><option value="none">Sin ordenar</option></select></label>
+          <label class="field"><span>Categorías a mostrar</span><select id="chTop"><option value="0">Todas</option><option value="5">Las 5 mayores</option><option value="10">Las 10 mayores</option><option value="15">Las 15 mayores</option><option value="20">Las 20 mayores</option></select></label>
+        </div>
+        <label class="check" id="chOthersRow"><input type="checkbox" id="chOthers" checked> Sumar el resto en una categoría "Otros"</label>
+      </fieldset>
+      <fieldset class="sym-group"><legend>Colores y presentación</legend>
+        <label class="field"><span>Título</span><input type="text" id="chTitle" placeholder="Opcional"></label>
+        <div class="grid2">
+          <label class="field"><span>Colores</span><select id="chColorMode"><option value="auto">Automático (capa o simbología)</option><option value="single">Un solo color</option><option value="ramp">Rampa de colores</option><option value="symbology">Simbología de la capa</option></select></label>
+          <label class="field color-field" id="chColorField"><span>Color</span><input type="color" id="chColor" value="#0e6e5c"></label>
+          <label class="field" id="chRampField"><span>Rampa</span><select id="chRamp"></select></label>
+        </div>
+        <div class="ramp-prev" id="chRampPrev" aria-hidden="true"></div>
+        <div class="grid2">
+          <label class="field"><span>Leyenda</span><select id="chLegend"><option value="auto">Automática</option><option value="show">Mostrar</option><option value="hide">Ocultar</option></select></label>
+          <label class="field"><span>Etiquetas de valor</span><select id="chValues"><option value="none">No</option><option value="show">Sobre cada barra o sector</option></select></label>
+        </div>
+        <label class="check"><input type="checkbox" id="chGrid" checked> Mostrar cuadrícula</label>
+        <label class="check"><input type="checkbox" id="chSub"> Mostrar bajo el título el detalle del cálculo (capa, operación y cantidad)</label>
+      </fieldset>
       <div class="err" id="chErr"></div>
     </div>
     <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnChartOk">Crear gráfico</button></div>
@@ -285,27 +334,124 @@
 </dialog>
 
 <!-- Indicador -->
-<dialog id="dlgKpi">
+<dialog id="dlgKpi" class="dlg-wide">
   <form method="dialog">
     <div class="dlg-head"><h2>Nuevo indicador</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     <div class="dlg-body">
-      <label class="field"><span>Capa</span><select id="kLayer"></select></label>
-      <div class="grid2">
-        <label class="field"><span>Campo</span><select id="kField"></select></label>
-        <label class="field"><span>Estadístico</span>
-          <select id="kStat"><option value="sum">Suma</option><option value="mean">Promedio</option><option value="min">Mínimo</option><option value="max">Máximo</option><option value="count">Conteo</option></select>
-        </label>
-      </div>
-      <div class="grid2">
-        <label class="field"><span>Etiqueta</span><input type="text" id="kLabel" placeholder="Opcional"></label>
-        <label class="field"><span>Unidad</span><input type="text" id="kUnit" placeholder="ej. hab, ha"></label>
-      </div>
+      <fieldset class="sym-group"><legend>Cálculo</legend>
+        <label class="field"><span>Capa</span><select id="kLayer"></select></label>
+        <div class="grid2">
+          <label class="field"><span>Campo</span><select id="kField"></select></label>
+          <label class="field"><span>Estadístico</span>
+            <select id="kStat"><option value="sum">Suma</option><option value="mean">Promedio</option><option value="min">Mínimo</option><option value="max">Máximo</option><option value="count">Conteo</option></select>
+          </label>
+        </div>
+        <label class="field"><span>Título del indicador</span><input type="text" id="kLabel" placeholder="Opcional"></label>
+      </fieldset>
+      <fieldset class="sym-group"><legend>Formato del número</legend>
+        <div class="kpi-preview" id="kPreview" aria-live="polite"></div>
+        <div class="grid2">
+          <label class="field"><span>Mostrar como</span><select id="kAbbr"><option value="none">Número completo (3.649.774)</option><option value="M">En millones (3,65 M)</option><option value="auto">Abreviado (mil o M)</option></select></label>
+          <label class="field"><span>Decimales</span><select id="kDec"><option value="auto">Automático</option><option value="0">Sin decimales</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
+          <label class="field"><span>Prefijo</span><input type="text" id="kPrefix" placeholder="ej. $"></label>
+          <label class="field"><span>Unidad o sufijo</span><input type="text" id="kUnit" placeholder="ej. hab, ha, %"></label>
+        </div>
+        <div class="grid2">
+          <label class="field"><span>Texto bajo el número</span><select id="kSub"><option value="none">Ninguno</option><option value="detail">Detalle del cálculo</option><option value="text">Texto propio</option></select></label>
+          <label class="field" id="kSubTextField"><span>Texto</span><input type="text" id="kSubText" placeholder="ej. Censo 2017"></label>
+        </div>
+      </fieldset>
+      <fieldset class="sym-group"><legend>Estilo</legend>
+        <div class="grid2">
+          <label class="field"><span>Tamaño del número</span><select id="kSize"><option value="s">Pequeño</option><option value="m">Normal</option><option value="l">Grande</option><option value="xl">Muy grande</option></select></label>
+          <label class="field"><span>Alineación</span><select id="kAlign"><option value="left">Izquierda</option><option value="center">Centro</option><option value="right">Derecha</option></select></label>
+        </div>
+        <div class="grid2">
+          <label class="check"><input type="checkbox" id="kColorOn"> Color propio para el número</label>
+          <label class="field color-field"><span class="sr-only">Color del número</span><input type="color" id="kColor" value="#0e6e5c"></label>
+        </div>
+      </fieldset>
       <div class="err" id="kErr"></div>
     </div>
     <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnKpiOk">Crear indicador</button></div>
   </form>
 </dialog>
 
+<!-- Imagen -->
+<dialog id="dlgImage">
+  <form method="dialog">
+    <div class="dlg-head"><h2 id="dlgImageTitle">Nueva imagen</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="dlg-body">
+      <div class="img-drop" id="imPreview" tabindex="0" role="button" aria-label="Elegir imagen"></div>
+      <input type="file" id="imFile" accept="image/*" hidden>
+      <span class="formats">PNG, JPG, WebP o SVG. Se reduce a 1.600 px como máximo. Sirve para logos, fotos o gráficas de apoyo.</span>
+      <label class="field"><span>O la dirección de una imagen en internet</span><input type="url" id="imUrl" placeholder="https://…/logo.png"></label>
+      <div class="grid2">
+        <label class="field"><span>Ajuste</span><select id="imFit"><option value="contain">Completa, sin recortar</option><option value="cover">Llenar el recuadro (recorta)</option></select></label>
+        <label class="field"><span>Texto alternativo</span><input type="text" id="imAlt" placeholder="Describe la imagen"></label>
+      </div>
+      <label class="field"><span>Pie de imagen (opcional)</span><input type="text" id="imCaption" placeholder="ej. Fuente: SAF, vuelo RPA 2026"></label>
+      <label class="field"><span>Enlace al hacer clic (opcional)</span><input type="url" id="imLink" placeholder="https://"></label>
+      <label class="check"><input type="checkbox" id="imHead"> Mostrar barra de título y fondo</label>
+      <div class="err" id="imErr"></div>
+    </div>
+    <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnImageOk">Agregar</button></div>
+  </form>
+</dialog>
+
+<!-- Apariencia de un widget -->
+<dialog id="dlgLook" class="dlg-side">
+  <form method="dialog">
+    <div class="dlg-head"><h2 id="lkTitle">Apariencia</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="dlg-body">
+      <label class="field" id="lkNameField"><span>Título del widget</span><input type="text" id="lkName"></label>
+      <label class="check"><input type="checkbox" id="lkShowHead"> Mostrar barra de título</label>
+      <fieldset class="sym-group"><legend>Colores</legend>
+        <div class="look-row"><label class="check"><input type="checkbox" id="lkBgOn"> Fondo propio</label><input type="color" id="lkBg" aria-label="Color de fondo"></div>
+        <label class="field"><span>Opacidad del fondo <output id="lkOpOut"></output></span><input type="range" id="lkOp" min="0" max="1" step="0.05"></label>
+        <div class="look-row"><label class="check"><input type="checkbox" id="lkTextOn"> Color de texto propio</label><input type="color" id="lkText" aria-label="Color del texto"></div>
+        <div class="look-row"><label class="check"><input type="checkbox" id="lkHeadOn"> Barra de título de color</label><input type="color" id="lkHead" aria-label="Color de la barra de título"></div>
+      </fieldset>
+      <fieldset class="sym-group"><legend>Forma</legend>
+        <div class="grid2">
+          <label class="check"><input type="checkbox" id="lkBorder"> Borde</label>
+          <label class="check"><input type="checkbox" id="lkShadow"> Sombra</label>
+        </div>
+        <label class="field"><span>Esquinas</span><select id="lkRadius"><option value="">Las del tema</option><option value="0">Rectas</option><option value="6">Suaves</option><option value="12">Redondeadas</option><option value="20">Muy redondeadas</option></select></label>
+      </fieldset>
+      <button class="btn" type="button" id="lkReset" style="align-self:flex-start">Volver al estilo por defecto</button>
+    </div>
+    <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnLookOk">Aplicar</button></div>
+  </form>
+</dialog>
+
+<!-- Tema de la aplicación -->
+<dialog id="dlgTheme" class="dlg-side">
+  <form method="dialog">
+    <div class="dlg-head"><h2>Tema de la aplicación</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="dlg-body">
+      <span class="label">Temas</span>
+      <div class="th-presets" id="thPresets"></div>
+      <div class="grid2">
+        <label class="field color-field"><span>Color principal</span><input type="color" id="thAccent"></label>
+        <label class="field"><span>Cabecera</span><select id="thHeader"><option value="light">Clara</option><option value="accent">Color principal</option><option value="dark">Oscura</option></select></label>
+      </div>
+      <label class="field"><span>Esquinas de los widgets</span><select id="thRadius"><option value="0">Rectas</option><option value="6">Suaves</option><option value="10">Normales</option><option value="16">Redondeadas</option></select></label>
+      <label class="check"><input type="checkbox" id="thGlass"> Widgets translúcidos (dejan ver el mapa)</label>
+      <label class="check"><input type="checkbox" id="thDark"> Modo oscuro para todos</label>
+      <label class="field"><span>Nombre visible en la cabecera</span><input type="text" id="thTitle"></label>
+    </div>
+    <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="btnThemeOk">Aplicar</button></div>
+  </form>
+</dialog>
+
+<!-- Salir con cambios sin guardar -->
+<dialog id="dlgLeave" style="width:min(440px,calc(100vw - 32px))">
+  <form method="dialog">
+    <div class="dlg-body"><b style="font:600 16px var(--f-display)">Tienes cambios sin guardar</b><span style="color:var(--muted)">Si sales ahora se pierden. Puedes guardarlos como borrador: los visualizadores seguirán viendo la versión publicada.</span></div>
+    <div class="dlg-foot"><button class="btn danger" value="discard" style="margin-right:auto">Salir sin guardar</button><button class="btn" value="cancel">Seguir editando</button><button class="btn primary" value="save">Guardar borrador y salir</button></div>
+  </form>
+</dialog>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
@@ -318,6 +464,8 @@
 <script src="js/comun.js"></script>
 <script src="js/basedatos.js"></script>
 <script src="js/simbologia.js"></script>
+<script src="js/coordenadas.js"></script>
+<script src="js/gdalio.js"></script>
 <script src="js/visor.js"></script>
 </body>
 </html>

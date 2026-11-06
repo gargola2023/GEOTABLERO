@@ -32,6 +32,12 @@ const ICON = {
   users:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0113 0"/><path d="M16 4.5a3.5 3.5 0 010 7M18 14a6 6 0 013.5 6"/>',
   copy:'<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 012-2h10"/>',
   edit:'<path d="M4 20h4L19 9l-4-4L4 16z"/>',
+  up:'<path d="M12 19V5M6 11l6-6 6 6"/>',
+  downArrow:'<path d="M12 5v14M6 13l6 6 6-6"/>',
+  top:'<path d="M5 4h14M12 20V9M7 13l5-5 5 5"/>',
+  brush:'<path d="M18.4 2.6a2 2 0 012.9 2.9L12 14.8 9.2 12z"/><path d="M7 14c-1.7 0-3 1.3-3 3 0 1.2-.8 2.3-2 3 3.3 0 8-1 8-4a3 3 0 00-3-2z"/>',
+  share:'<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/>',
+  globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/>',
   palette:'<path d="M12 3a9 9 0 100 18c1.1 0 1.6-.8 1.6-1.6 0-.5-.2-.8-.4-1.1-.2-.3-.4-.6-.4-1 0-.9.7-1.6 1.6-1.6H16a5 5 0 005-5C21 6.6 17 3 12 3z"/><circle cx="7.5" cy="11" r="1.2"/><circle cx="10" cy="7" r="1.2"/><circle cx="15" cy="7.5" r="1.2"/>',
   more:'<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
   legend:'<rect x="4" y="5" width="4" height="4" rx="1"/><rect x="4" y="15" width="4" height="4" rx="1"/><path d="M11 7h9M11 17h9"/>',
@@ -117,7 +123,59 @@ async function hashPass(login, pass){
 /* ---------- Estado compartido ---------- */
 const S = { users: [], apps: [], connections: [], me: null };
 const ROLE_NAME = { admin:'Administrador', editor:'Editor', viewer:'Visualizador' };
-const roleFor = (u, a) => u && a ? (u.isAdmin ? 'admin' : (a.access && a.access[u.id]) || null) : null;
+/* Perfil de un usuario (o de una visita sin sesión, u = null) en una aplicación:
+   administrador > acceso asignado > creador > compartida con la organización o pública */
+function roleFor(u, a){
+  if (!a) return null;
+  if (u && u.isAdmin) return 'admin';
+  const r = u && a.access ? a.access[u.id] : null;
+  if (r) return r;
+  if (u && a.createdBy === u.id) return 'editor';
+  if (a.share === 'public') return 'viewer';
+  if (a.share === 'org' && u) return 'viewer';
+  return null;
+}
+const SHARE = {
+  private: { name:'Privada', desc:'Solo tú, los administradores y las personas que agregues en Accesos.' },
+  org:     { name:'Organización', desc:'Cualquier usuario con cuenta en GeoTablero puede verla. Los perfiles de editor se siguen asignando en Accesos.' },
+  public:  { name:'Pública', desc:'Cualquier persona con el enlace puede verla, sin iniciar sesión.' }
+};
+const shareOf = a => SHARE[a && a.share] ? a.share : 'private';
+const canShare = (u, a) => !!(u && a && (u.isAdmin || a.createdBy === u.id));
+/* Diálogo Compartir, común al portal y a la página de la aplicación */
+function openShareDialog(app, onSaved){
+  let d = document.getElementById('dlgShare');
+  if (!d){
+    d = el('dialog', { id:'dlgShare' });
+    d.innerHTML = `<form method="dialog"><div class="dlg-head"><h2 id="shTitle">Compartir</h2><button class="icon-btn" value="cancel" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="dlg-body"><div class="share-opts" id="shOpts" role="radiogroup" aria-label="Quién puede ver la aplicación"></div>
+      <label class="field"><span>Enlace de la aplicación</span><div class="share-link"><input type="text" id="shLink" readonly><button class="btn" type="button" id="shCopy">Copiar</button></div></label>
+      <div class="hint" id="shNote"></div></div>
+      <div class="dlg-foot"><button class="btn" value="cancel">Cancelar</button><button class="btn primary" type="button" id="shOk">Guardar</button></div></form>`;
+    document.body.append(d);
+    d.querySelector('#shCopy').addEventListener('click', () => copyText(d.querySelector('#shLink').value));
+  }
+  const opts = d.querySelector('#shOpts'); opts.innerHTML = '';
+  const cur = shareOf(app);
+  Object.entries(SHARE).forEach(([k, o]) => {
+    const id = 'sh-' + k;
+    opts.append(el('label', { class:'share-opt', for:id }, el('input', { type:'radio', name:'share', id, value:k, checked: k === cur }),
+      el('span', { class:'so-txt' }, el('b', {}, o.name), el('span', {}, o.desc))));
+  });
+  d.querySelector('#shTitle').textContent = `Compartir · ${app.name}`;
+  d.querySelector('#shLink').value = new URL(appUrl(app.id), location.href).href;
+  d.querySelector('#shNote').innerHTML = 'Los visualizadores ven siempre la <b>versión publicada</b>. Recuerda que en esta versión los datos viven en cada navegador: para que otros vean la aplicación, publícala en el repositorio (Usuarios → Exportar).';
+  const ok = d.querySelector('#shOk');
+  const nok = ok.cloneNode(true); ok.replaceWith(nok);
+  nok.addEventListener('click', async () => {
+    const v = (d.querySelector('input[name="share"]:checked') || {}).value || 'private';
+    const a = await patchApp(app.id, { share: v });
+    if (a) app.share = v;
+    d.close(); toast(`Ahora la aplicación es: ${SHARE[v].name}`);
+    if (onSaved) onSaved(v);
+  });
+  d.showModal();
+}
 const saveUsers = () => DB.set('users', S.users);
 const saveApps = () => DB.set('apps', S.apps);
 const saveConnections = () => DB.set('connections', S.connections);
@@ -218,7 +276,7 @@ async function seedDemo(){
   S.users = [];
   for (const d of DEMO) S.users.push({ id: nid('U'), login: d.login, name: d.name, isAdmin: d.isAdmin, pass: await hashPass(d.login, d.pass), createdAt: Date.now(), demo:true });
   const st = sampleState();
-  const app = { id: nid('A'), name:'Demostración Región Metropolitana', description:'Comunas con población del Censo 2017 y zonas de trabajo editables.', createdBy: S.users[0].id, createdAt: Date.now(), updatedAt: Date.now(), access: { [S.users[1].id]:'editor', [S.users[2].id]:'viewer' }, stats: statsOf(st), thumb: thumbData(st) };
+  const app = { id: nid('A'), name:'Demostración Región Metropolitana', description:'Comunas con población del Censo 2017 y zonas de trabajo editables.', createdBy: S.users[0].id, createdAt: Date.now(), updatedAt: Date.now(), publishedAt: Date.now(), share:'private', access: { [S.users[1].id]:'editor', [S.users[2].id]:'viewer' }, stats: statsOf(st), thumb: thumbData(st) };
   S.apps = [app];
   await DB.set('app:' + app.id, st); await saveUsers(); await saveApps();
 }
@@ -236,15 +294,16 @@ async function fetchPublished(){
 }
 async function exportAll(){
   const data = { formato:'geotablero', version:2, exportado: new Date().toISOString(), users: S.users, apps: S.apps, connections: S.connections, states:{} };
-  for (const a of S.apps) data.states[a.id] = await DB.get('app:' + a.id);
+  data.drafts = {};
+  for (const a of S.apps){ data.states[a.id] = await DB.get('app:' + a.id); const dr = await DB.get('draft:' + a.id); if (dr) data.drafts[a.id] = dr; }
   return data;
 }
 async function importAll(d){
   if (d.formato !== 'geotablero' || !Array.isArray(d.users) || !Array.isArray(d.apps)) throw new Error('El archivo no es un respaldo de GeoTablero.');
   if (!d.users.some(u => u.isAdmin)) throw new Error('El respaldo no tiene ningún administrador.');
-  for (const a of (await DB.get('apps')) || []) await DB.del('app:' + a.id);
+  for (const a of (await DB.get('apps')) || []){ await DB.del('app:' + a.id); await DB.del('draft:' + a.id); }
   S.users = d.users; S.apps = d.apps; S.connections = Array.isArray(d.connections) ? d.connections : [];
-  for (const a of S.apps) await DB.set('app:' + a.id, (d.states && d.states[a.id]) || emptyState());
+  for (const a of S.apps){ await DB.set('app:' + a.id, (d.states && d.states[a.id]) || emptyState()); if (d.drafts && d.drafts[a.id]) await DB.set('draft:' + a.id, d.drafts[a.id]); }
   await saveUsers(); await saveApps(); await saveConnections();
   await DB.set('meta', { origen: d.exportado || null, importado: Date.now() });
 }

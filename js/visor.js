@@ -10,7 +10,24 @@ const canEdit = () => role === 'admin' || role === 'editor';
    ================================================================= */
 const map = L.map('map', { zoomControl: true, maxZoom: 20 }).setView([-33.47, -70.65], 11);
 L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
-map.on('mousemove', e => { $('#coord').textContent = `WGS84 · ${e.latlng.lat.toFixed(5)}°, ${e.latlng.lng.toFixed(5)}°`; });
+/* Coordenadas del cursor en la cabecera, en el formato que elija cada persona */
+let coordFmt = 'dec';
+try { coordFmt = localStorage.getItem('gt_coordfmt') || 'dec'; } catch {}
+if (!COORD_FORMATS[coordFmt]) coordFmt = 'dec';
+const COORD_SHORT = { dec:'Decimal', dms:'GMS', utm_sirgas:'UTM' };
+let lastCursor = null;
+function paintCoordBtn(){
+  $('#coordFmt').textContent = COORD_SHORT[coordFmt];
+  $('#coordVal').textContent = lastCursor ? formatCoord(lastCursor.lat, lastCursor.lng, coordFmt) : 'mueve el cursor sobre el mapa';
+  const code = lastCursor ? epsgFor(coordFmt, lastCursor.lat, lastCursor.lng) : null;
+  $('#coord').title = `${COORD_FORMATS[coordFmt]}${code ? ' · EPSG ' + code : ''}. Clic para cambiar el formato.`;
+  $('#coordFmt').textContent = 'SIRGAS 2025 · ' + COORD_SHORT[coordFmt];
+}
+map.on('mousemove', e => { lastCursor = e.latlng; paintCoordBtn(); if (typeof updateCoordsWidget === 'function') updateCoordsWidget(); });
+$('#coord').addEventListener('click', ev => openMenu(ev.currentTarget, Object.entries(COORD_FORMATS).map(([k, n]) => ({
+  icon: k === coordFmt ? '<path d="M5 12l5 5 9-10"/>' : '', label: n,
+  run:() => { coordFmt = k; try { localStorage.setItem('gt_coordfmt', k); } catch {} paintCoordBtn(); }
+}))));
 map.createPane('labels'); map.getPane('labels').style.zIndex = 450; map.getPane('labels').style.pointerEvents = 'none';
 
 const ESRI = s => `https://server.arcgisonline.com/ArcGIS/rest/services/${s}/MapServer/tile/{z}/{y}/{x}`;
@@ -133,11 +150,11 @@ function bindFeature(lyr, f){
   f.options.pmIgnore = !editAllowed(lyr);
   f.on('click', ev => { L.DomEvent.stopPropagation(ev); openPopup(lyr, f, ev.latlng); });
   f._gtLayer = lyr.id;
-  f.on('pm:edit pm:dragend', () => { scheduleRefresh(); if (dbWritable(lyr)) queueGeomSave(lyr, f); });
+  f.on('pm:edit pm:dragend', () => { scheduleRefresh(); scheduleSave(); if (dbWritable(lyr)) queueGeomSave(lyr, f); });
 }
 
 function addVectorLayer(fc, o = {}){
-  const lyr = { id: o.id || nid('L'), name: o.name || 'Capa sin nombre', kind:'vector', editable: !!o.editable, color: toHex(o.color || nextColor()), visible: o.visible !== false, opacity: 1, source: o.source, sourceUrl: o.sourceUrl, db: o.db ? { ...o.db } : null };
+  const lyr = { id: o.id || nid('L'), name: o.name || 'Capa sin nombre', kind:'vector', editable: !!o.editable, color: toHex(o.color || nextColor()), visible: o.visible !== false, opacity: 1, source: o.source, sourceUrl: o.sourceUrl, db: o.db ? { ...o.db } : null, srcCrs: o.srcCrs || null };
   lyr.geom = o.geom || inferGeom(fc);
   lyr.style = o.style ? { ...defaultStyle(lyr.color, lyr.geom), ...structuredClone(o.style) } : defaultStyle(lyr.color, lyr.geom);
   lyr.group = L.geoJSON(null, {
@@ -154,7 +171,7 @@ function addVectorLayer(fc, o = {}){
   layers.push(lyr);
   if (lyr.db) startDbTimer(lyr);
   if (lyr.editable && canEdit() && !loading) targetId = lyr.id;
-  if (!loading){ refreshEditing(); renderLayers(); scheduleRefresh(); }
+  if (!loading){ refreshEditing(); renderLayers(); scheduleRefresh(); scheduleSave(); }
   return lyr;
 }
 
@@ -166,6 +183,20 @@ function rasterPane(id){
   return name;
 }
 function orderRasterPanes(){ layers.filter(l => l.kind === 'raster').forEach((l, i) => { const p = map.getPane('r-' + l.id); if (p) p.style.zIndex = 300 + i; }); }
+/* Orden de dibujo según la lista: el primer elemento del arreglo queda abajo.
+   Las imágenes siempre se dibujan bajo las capas vectoriales. */
+function applyLayerOrder(){
+  orderRasterPanes();
+  layers.forEach(l => { if (l.kind === 'vector' && l.visible && map.hasLayer(l.group)) l.group.bringToFront(); });
+}
+function moveLayer(lyr, toIndex){
+  const from = layers.indexOf(lyr);
+  toIndex = Math.max(0, Math.min(layers.length - 1, toIndex));
+  if (from < 0 || from === toIndex) return;
+  layers.splice(from, 1); layers.splice(toIndex, 0, lyr);
+  applyLayerOrder(); renderLayers(); scheduleSave();
+  requestAnimationFrame(() => { const g = document.querySelector(`.layer[data-id="${lyr.id}"] .lgrip`); if (g) g.focus(); });
+}
 function makeRaster(spec, pane){
   const tok = spec.token || undefined;
   let t;
@@ -191,7 +222,7 @@ function addRasterLayer(spec, name, o = {}){
   map.getPane(pane).style.filter = fxFilter(spec.fx);
   if (lyr.visible) lyr.tile.addTo(map);
   layers.push(lyr); orderRasterPanes();
-  if (!loading) renderLayers();
+  if (!loading){ renderLayers(); scheduleSave(); }
   return lyr;
 }
 
@@ -216,7 +247,7 @@ async function removeLayer(lyr){
   widgets = widgets.filter(w => !(w.cfg && w.cfg.layerId === lyr.id));
   if (targetId === lyr.id) targetId = (layers.find(l => l.editable) || {}).id || null;
   if (widgets.length !== had) renderWidgets();
-  refreshEditing(); renderLayers(); scheduleRefresh();
+  refreshEditing(); renderLayers(); scheduleRefresh(); scheduleSave();
 }
 function toggleEditable(lyr){
   lyr.editable = !lyr.editable;
@@ -224,17 +255,73 @@ function toggleEditable(lyr){
   if (lyr.editable) targetId = lyr.id;
   else if (targetId === lyr.id) targetId = (layers.find(l => l.editable) || {}).id || null;
   map.pm.disableGlobalEditMode(); map.pm.disableGlobalDragMode(); map.pm.disableGlobalRemovalMode();
-  refreshEditing(); renderLayers();
+  refreshEditing(); renderLayers(); scheduleSave();
 }
-function exportLayer(lyr){
-  const blob = new Blob([JSON.stringify(lyr.group.toGeoJSON(), null, 2)], { type:'application/geo+json' });
-  downloadBlob(blob, (lyr.name.replace(/[^\w\-]+/g, '_') || 'capa') + '.geojson');
+/* ---------- Descargar una capa en varios formatos y sistemas ---------- */
+const dlgExport = $('#dlgExport');
+let exportLyr = null;
+Object.entries(EXPORT_FORMATS).forEach(([k, f]) => $('#exFormat').append(el('option', { value:k }, f.name)));
+const hexA = (hex, a) => toHex(hex) + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, '0');
+/* Estilo OGR para que el KMZ conserve los colores de la simbología */
+function ogrStyle(lyr, feature){
+  const st = featureStyle(lyr, feature), k = geomKind(lyr, feature);
+  if (k === 'pt') return `SYMBOL(c:${toHex(st.fillColor)})`;
+  if (k === 'ln') return `PEN(c:${toHex(st.color)},w:${Math.max(1, st.weight)}px)`;
+  return `BRUSH(fc:${hexA(st.fillColor, st.fillOpacity)});PEN(c:${toHex(st.color)},w:${Math.max(1, st.weight)}px)`;
 }
+function syncExport(){
+  const f = EXPORT_FORMATS[$('#exFormat').value], crs = CRS_BY_ID[$('#exCrs').value];
+  $('#exCrs').disabled = !!f.wgs84Only;
+  $('#exStyleRow').hidden = $('#exFormat').value !== 'kmz';
+  const src = exportLyr && exportLyr.srcCrs;
+  const lines = [];
+  if (f.wgs84Only) lines.push('KMZ siempre va en WGS84 geográficas: es lo que exige Google Earth.');
+  else if (crs && crs.id !== 'EPSG:4326' && $('#exFormat').value === 'geojson') lines.push('El GeoJSON estándar va en WGS84; en otro sistema se incluye la definición "crs", que QGIS y ArcGIS leen sin problema.');
+  if (f.oneType) lines.push('Si la capa mezcla puntos, líneas y polígonos, se crea una capa por tipo de geometría.');
+  if (src && src.name) lines.push(`Sistema original de la capa: <b>${esc(src.name)}${src.epsg ? ' · EPSG ' + src.epsg : ''}</b>.`);
+  if (crs && /PSAD56|SAD69/.test(crs.name)) lines.push('PSAD56 y SAD69 se calculan con los parámetros oficiales de traslado para Chile (exactitud de algunos metros).');
+  $('#exHint').innerHTML = lines.join(' ');
+  $('#exHint').hidden = !lines.length;
+}
+$('#exFormat').addEventListener('change', syncExport);
+$('#exCrs').addEventListener('change', syncExport);
+function openExport(lyr){
+  exportLyr = lyr;
+  const fc = lyr.group.toGeoJSON();
+  $('#exTitle').textContent = `Descargar · ${lyr.name}`;
+  $('#exName').value = lyr.name;
+  const pref = lyr.srcCrs && lyr.srcCrs.id && CRS_BY_ID[lyr.srcCrs.id] ? lyr.srcCrs.id : suggestCrs(fc);
+  fillCrsSelect($('#exCrs'), pref);
+  $('#exErr').textContent = '';
+  syncExport(); dlgExport.showModal();
+}
+$('#btnExportOk').addEventListener('click', async () => {
+  const lyr = exportLyr, format = $('#exFormat').value, crs = $('#exCrs').value, err = $('#exErr'), btn = $('#btnExportOk');
+  const fc = lyr.group.toGeoJSON();
+  if (!fc.features.length) return err.textContent = 'La capa no tiene entidades.';
+  if (format === 'kmz'){
+    const withStyle = $('#exStyle').checked;
+    const lb = lyr.style.label && lyr.style.label.field;
+    fc._nameField = lb || lyr.fields.find(k => /^(nombre|name|titulo|comuna)$/i.test(k)) || lyr.fields[0] || 'Name';
+    const feats = []; lyr.group.eachLayer(f => feats.push(f));
+    fc.features.forEach((f, i) => { if (withStyle && feats[i]) f.properties = { ...f.properties, OGR_STYLE: ogrStyle(lyr, feats[i].feature) }; });
+  }
+  btn.disabled = true; err.style.color = 'var(--muted)';
+  try {
+    const r = await gdalExport(fc, { format, crs, name: $('#exName').value.trim() || lyr.name, onStatus: m => { err.textContent = m; } });
+    downloadBlob(r.blob, r.filename);
+    dlgExport.close();
+    toast(`Descargado ${r.filename}${EXPORT_FORMATS[format].wgs84Only ? '' : ' · ' + CRS_BY_ID[crs].name}`);
+  } catch (e){ err.style.color = ''; err.textContent = 'No se pudo exportar: ' + (e.message || e); }
+  finally { btn.disabled = false; if (err.style.color) err.textContent = ''; err.style.color = ''; }
+});
 
+let dragLayerId = null;
+const clearDropMarks = () => document.querySelectorAll('.layer.drop-before, .layer.drop-after').forEach(n => n.classList.remove('drop-before', 'drop-after'));
 const GEOM_LABEL = { Point:'Puntos', LineString:'Líneas', Polygon:'Polígonos', Mixed:'Mixta' };
 function renderLayers(){
   const ul = $('#layerList');
-  if (!ul) return scheduleSave();
+  if (!ul) return;
   ul.innerHTML = '';
   if (!layers.length) ul.append(el('li', { class:'empty' }, canEdit() ? 'Aún no hay capas. Agrega un archivo, un servicio o crea una capa editable.' : 'Esta aplicación aún no tiene capas.'));
   [...layers].reverse().forEach(lyr => {
@@ -242,6 +329,8 @@ function renderLayers(){
       lyr.visible = e.target.checked;
       const obj = lyr.kind === 'vector' ? lyr.group : lyr.tile;
       lyr.visible ? obj.addTo(map) : map.removeLayer(obj);
+      if (lyr.visible) applyLayerOrder();
+      scheduleSave();
       scheduleRefresh();
     }});
     vis.checked = lyr.visible;
@@ -265,7 +354,10 @@ function renderLayers(){
     const menuItems = [
       lyr.db ? { icon: ICON.refresh, label:'Recargar desde la base de datos', run:() => refreshDbLayer(lyr, false) } : null,
       canEdit() && lyr.kind === 'vector' && (!lyr.db || lyr.db.write) ? { icon: lyr.editable ? ICON.lock : ICON.pen, label: lyr.editable ? 'Bloquear edición' : 'Permitir edición y dibujo', run:() => toggleEditable(lyr) } : null,
-      canEdit() && lyr.kind === 'vector' ? { icon: ICON.down, label:'Descargar GeoJSON', run:() => exportLayer(lyr) } : null,
+      canEdit() && lyr.kind === 'vector' ? { icon: ICON.down, label:'Descargar (Shapefile, GeoPackage, GDB, KMZ…)', run:() => openExport(lyr) } : null,
+      canEdit() && layers.indexOf(lyr) < layers.length - 1 ? { icon: ICON.up, label:'Subir', run:() => moveLayer(lyr, layers.indexOf(lyr) + 1) } : null,
+      canEdit() && layers.indexOf(lyr) > 0 ? { icon: ICON.downArrow, label:'Bajar', run:() => moveLayer(lyr, layers.indexOf(lyr) - 1) } : null,
+      canEdit() && layers.indexOf(lyr) < layers.length - 1 ? { icon: ICON.top, label:'Llevar arriba de todo', run:() => moveLayer(lyr, layers.length - 1) } : null,
       canEdit() ? { icon: ICON.edit, label:'Cambiar nombre', run:() => renameLayer(lyr) } : null,
       canEdit() ? { icon: ICON.trash, label:'Quitar capa', danger:true, run:() => removeLayer(lyr) } : null
     ].filter(Boolean);
@@ -274,7 +366,36 @@ function renderLayers(){
       canEdit() ? el('button', { class:'icon-btn', title:'Simbología', 'aria-label':'Simbología', onclick:() => openSymbology(lyr) }, svg(ICON.palette)) : null,
       menuItems.length ? el('button', { class:'icon-btn', title:'Más opciones', 'aria-label':'Más opciones', 'aria-haspopup':'menu', onclick: ev => openMenu(ev.currentTarget, menuItems) }, svg(ICON.more)) : null
     );
-    const li = el('li', { class:'layer' + (lyr.id === targetId && canEdit() ? ' target' : '') }, vis, name, acts);
+    const handle = el('div', { class:'lhandle' });
+    const li = el('li', { class:'layer' + (lyr.id === targetId && canEdit() ? ' target' : ''), 'data-id': lyr.id }, handle, name, acts);
+    if (canEdit() && layers.length > 1){
+      const grip = el('button', { class:'lgrip', type:'button', title:'Arrastra para cambiar el orden (o usa las flechas ↑ ↓)', 'aria-label':`Cambiar orden de ${lyr.name}` }, svg(ICON.grip));
+      grip.addEventListener('keydown', e => {
+        if (e.key === 'ArrowUp'){ e.preventDefault(); moveLayer(lyr, layers.indexOf(lyr) + 1); }
+        if (e.key === 'ArrowDown'){ e.preventDefault(); moveLayer(lyr, layers.indexOf(lyr) - 1); }
+      });
+      // Solo el asa activa el arrastre, para no interferir con el control de opacidad
+      grip.addEventListener('pointerdown', () => { li.draggable = true; });
+      li.addEventListener('dragstart', e => { dragLayerId = lyr.id; li.classList.add('dragging-layer'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', lyr.id); });
+      li.addEventListener('dragend', () => { li.draggable = false; li.classList.remove('dragging-layer'); clearDropMarks(); dragLayerId = null; });
+      handle.append(grip);
+    }
+    handle.append(vis);
+    li.addEventListener('dragover', e => {
+      if (!dragLayerId || dragLayerId === lyr.id) return;
+      e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+      const r = li.getBoundingClientRect(), above = e.clientY < r.top + r.height / 2;
+      clearDropMarks(); li.classList.add(above ? 'drop-before' : 'drop-after');
+    });
+    li.addEventListener('dragleave', e => { if (!li.contains(e.relatedTarget)) li.classList.remove('drop-before', 'drop-after'); });
+    li.addEventListener('drop', e => {
+      e.preventDefault();
+      const dragged = layers.find(l => l.id === dragLayerId); if (!dragged || dragged === lyr) return;
+      const above = li.classList.contains('drop-before'); clearDropMarks();
+      // La lista se muestra al revés del arreglo: "encima" en la lista = índice mayor
+      const rest = layers.filter(l => l !== dragged), t = rest.indexOf(lyr);
+      moveLayer(dragged, above ? t + 1 : t);
+    });
     const leg = layerLegend(lyr, 8); if (leg) li.append(leg);
     if (lyr.kind === 'raster'){
       const op = el('span', {}, Math.round(lyr.opacity * 100) + '%');
@@ -285,7 +406,6 @@ function renderLayers(){
     ul.append(li);
   });
   renderLegend();
-  scheduleSave();
 }
 
 /* =================================================================
@@ -327,6 +447,7 @@ map.on('pm:create', e => {
   if (!t.group.hasLayer(f)) t.group.addLayer(f);
   bindFeature(t, f);
   f._dbNew = dbWritable(t);
+  scheduleSave();
   scheduleRefresh();
   const ll = f.getLatLng ? f.getLatLng() : f.getBounds().getCenter();
   setTimeout(() => openPopup(t, f, ll), 50);
@@ -336,7 +457,7 @@ map.on('pm:remove', e => {
   if (lyr && dbWritable(lyr) && !f._dbNew){
     dbRemoveFeature(lyr, f).then(() => toast('Entidad eliminada de la base de datos')).catch(err => { lyr.group.addLayer(f); toast('No se eliminó en la base: ' + err.message); scheduleRefresh(); });
   }
-  scheduleRefresh();
+  scheduleRefresh(); scheduleSave();
 });
 let popupOpen = false;
 map.on('popupopen', () => { popupOpen = true; });
@@ -366,7 +487,7 @@ function openPopup(lyr, f, latlng){
           ev.currentTarget.disabled = true;
           try { await dbRemoveFeature(lyr, f); } catch (e){ ev.currentTarget.disabled = false; return toast('No se eliminó en la base: ' + e.message); }
         }
-        lyr.group.removeLayer(f); map.closePopup(); scheduleRefresh(); toast(toDb ? 'Entidad eliminada de la base de datos' : 'Entidad eliminada');
+        lyr.group.removeLayer(f); map.closePopup(); scheduleRefresh(); scheduleSave(); toast(toDb ? 'Entidad eliminada de la base de datos' : 'Entidad eliminada');
       } }, svg(ICON.trash), 'Eliminar'),
       el('button', { class:'btn primary', onclick: async ev => {
         keys.forEach(k => { if (toDb && k === pk) return; const v = inputs[k].value.trim(); props[k] = v !== '' && /^-?\d+(\.\d+)?$/.test(v) ? +v : v; });
@@ -379,7 +500,7 @@ function openPopup(lyr, f, latlng){
         }
         if (f.setStyle) f.setStyle(featureStyle(lyr, f.feature));
         applyLabels(lyr);
-        map.closePopup(); scheduleRefresh(); toast(toDb ? 'Guardado en la base de datos' : 'Atributos guardados');
+        map.closePopup(); scheduleRefresh(); scheduleSave(); toast(toDb ? 'Guardado en la base de datos' : 'Atributos guardados');
       }}, 'Guardar')));
   } else {
     const tb = el('table');
@@ -443,9 +564,21 @@ function chartData(c){
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(valueOf(f, c.valField));
   });
-  const rows = [...groups].map(([k, v]) => [k, stat(v, c.valField === '__count' ? 'count' : c.agg)]);
-  if (c.type === 'line') rows.sort((a, b) => (isNaN(+a[0]) || isNaN(+b[0])) ? a[0].localeCompare(b[0], 'es') : (+a[0]) - (+b[0]));
-  else rows.sort((a, b) => (b[1] || 0) - (a[1] || 0));
+  const agg = c.valField === '__count' ? 'count' : c.agg;
+  let rows = [...groups].map(([k, v]) => [k, stat(v, agg), v]);
+  const byName = (a, b) => (isNaN(+a[0]) || isNaN(+b[0])) ? a[0].localeCompare(b[0], 'es') : (+a[0]) - (+b[0]);
+  const sort = c.sort || (c.type === 'line' ? 'alpha' : 'desc');
+  if (sort === 'desc') rows.sort((a, b) => (b[1] || 0) - (a[1] || 0));
+  else if (sort === 'asc') rows.sort((a, b) => (a[1] || 0) - (b[1] || 0));
+  else if (sort === 'alpha') rows.sort(byName);
+  const top = +c.top || 0;
+  if (top && rows.length > top){
+    // las mayores se eligen por valor, aunque el orden visible sea otro
+    const keep = new Set(rows.slice().sort((a, b) => (b[1] || 0) - (a[1] || 0)).slice(0, top).map(r => r[0]));
+    const rest = rows.filter(r => !keep.has(r[0]));
+    rows = rows.filter(r => keep.has(r[0]));
+    if (c.others !== false && (agg === 'sum' || agg === 'count')) rows.push(['Otros', stat(rest.flatMap(r => r[2]), agg)]);
+  }
   return { labels: rows.map(r => r[0]), data: rows.map(r => Number.isFinite(r[1]) ? +r[1].toFixed(4) : 0) };
 }
 function subFor(c, lyr){
@@ -472,14 +605,16 @@ const WTYPE = {
   kpi:      { name:'Indicador', w:184, h:112, minW:140, minH:88 },
   chart:    { name:'Gráfico',   w:352, h:284, minW:240, minH:180 },
   text:     { name:'Texto',     w:320, h:104, minW:140, minH:48 },
-  legend:   { name:'Leyenda',   w:240, h:280, minW:170, minH:100, single:true }
+  legend:   { name:'Leyenda',   w:240, h:280, minW:170, minH:100, single:true },
+  coords:   { name:'Coordenadas', w:350, h:440, minW:280, minH:180, single:true },
+  image:    { name:'Imagen',    w:260, h:160, minW:60, minH:40 }
 };
 const stage = $('#vApp'), wlayer = $('#widgets');
 const narrow = () => matchMedia('(max-width: 760px)').matches;
 const GRID = 8, snap = v => Math.round(v / GRID) * GRID;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const isMin = w => runtimeMin.has(w.id) ? runtimeMin.get(w.id) : !!w.min;
-const widgetTitle = w => w.type === 'kpi' ? (w.cfg.label || 'Indicador') : w.type === 'chart' ? (w.cfg.title || 'Gráfico') : w.type === 'text' ? (w.title || (w.cfg.text || '').split('\n')[0].replace(/\*\*/g, '').slice(0, 40) || 'Texto') : WTYPE[w.type].name;
+const widgetTitle = w => w.title && !['kpi', 'chart'].includes(w.type) ? w.title : w.type === 'kpi' ? (w.cfg.label || 'Indicador') : w.type === 'chart' ? (w.cfg.title || 'Gráfico') : w.type === 'text' ? (w.title || (w.cfg.text || '').split('\n')[0].replace(/\*\*/g, '').slice(0, 40) || 'Texto') : WTYPE[w.type].name;
 
 /* Distribución inicial para aplicaciones creadas antes de los widgets */
 function defaultWidgets(st){
@@ -547,7 +682,7 @@ function startDrag(e, w, node, mode){
     node.removeEventListener('pointermove', move); node.removeEventListener('pointerup', up); node.removeEventListener('pointercancel', up);
     node.classList.remove('dragging');
     const ww = node.offsetWidth, hh = node.offsetHeight;
-    if (mode === 'resize'){ w.w = ww; w.h = hh; }
+    if (mode === 'resize'){ w.w = ww; w.h = hh; if (w.type === 'kpi') refreshWidgets(); }
     const changed = moved || node.offsetLeft !== r0.left || node.offsetTop !== r0.top || ww !== r0.width || hh !== r0.height;
     anchorFrom(node.offsetLeft, node.offsetTop, ww, hh, w);
     if (changed) scheduleSave();
@@ -575,7 +710,8 @@ function buildWidget(w){
     el('span', { class:'wg-grip design-only', 'aria-hidden':'true' }, svg(ICON.grip)),
     title,
     el('span', { class:'wg-acts' },
-      ['kpi', 'chart', 'text'].includes(w.type) ? el('button', { class:'icon-btn design-only', title:'Configurar', 'aria-label':'Configurar widget', onclick:() => configure(w) }, svg(ICON.sliders)) : null,
+      ['kpi', 'chart', 'text', 'image'].includes(w.type) ? el('button', { class:'icon-btn design-only', title:'Configurar contenido', 'aria-label':'Configurar contenido', onclick:() => configure(w) }, svg(ICON.sliders)) : null,
+      el('button', { class:'icon-btn design-only', title:'Apariencia', 'aria-label':'Apariencia del widget', onclick:() => openLook(w) }, svg(ICON.brush)),
       btnMin,
       el('button', { class:'icon-btn design-only', title:'Quitar widget', 'aria-label':'Quitar widget', onclick:() => removeWidget(w) }, svg(ICON.x))));
   const body = el('div', { class:'wg-body' });
@@ -586,6 +722,7 @@ function buildWidget(w){
   head.addEventListener('keydown', e => keyMove(e, w, node));
   node.addEventListener('pointerdown', () => { if (design && bringFront(w)) scheduleSave(); });
   nodes.set(w.id, node);
+  applyLook(node, w);
   mountBody(w, body);
   return node;
 }
@@ -600,6 +737,13 @@ function mountBody(w, body){
     const grid = el('div', { class:'basemaps', id:'basemaps' });
     body.append(grid);
     renderBasemapButtons(grid);   // el widget aún no está en la página: se le pasa su propio contenedor
+  } else if (w.type === 'coords'){
+    mountCoords(body);
+  } else if (w.type === 'image'){
+    const c = w.cfg || {};
+    const img = el('img', { src: c.src || '', alt: c.alt || '', style:`object-fit:${c.fit || 'contain'}`, draggable:'false' });
+    body.append(c.link ? el('a', { href: c.link, target:'_blank', rel:'noopener', class:'wg-imglink' }, img) : img);
+    if (c.caption) body.append(el('div', { class:'wg-caption' }, c.caption));
   } else if (w.type === 'legend'){
     const lb = el('div', { class:'legend-box', id:'legendBox' });
     body.append(lb);
@@ -632,50 +776,125 @@ function renderWidgets(){
   refreshWidgets();
   if (!widgets.length) wlayer.append(el('div', { class:'wg-empty' }, canEdit() ? 'Esta aplicación no tiene widgets. Entra a Diseñar para agregarlos.' : ''));
 }
+function fmtKpi(v, c){
+  const abbr = c.abbr || 'M', dec = c.decimals == null || c.decimals === 'auto' ? null : +c.decimals;
+  let x = v, suf = '';
+  if ((abbr === 'M' || abbr === 'auto') && Math.abs(v) >= 1e6){ x = v / 1e6; suf = ' M'; }
+  else if (abbr === 'auto' && Math.abs(v) >= 1e4){ x = v / 1e3; suf = ' mil'; }
+  const o = dec == null ? { maximumFractionDigits: suf ? 2 : (Math.abs(x) >= 100 ? 0 : 2) } : { minimumFractionDigits: dec, maximumFractionDigits: dec };
+  return new Intl.NumberFormat('es-CL', o).format(x) + suf;
+}
+function kpiValue(c){
+  const lyr = layers.find(l => l.id === c.layerId), feats = featuresOf(lyr);
+  return { lyr, n: feats.length, v: stat(feats.map(f => valueOf(f, c.field)), c.stat) };
+}
+function paintKpi(node, c, r){
+  const val = node.querySelector('.k-val'), sub = node.querySelector('.k-sub');
+  val.innerHTML = '';
+  val.append(c.prefix ? el('span', { class:'k-pre' }, c.prefix) : '', Number.isFinite(r.v) ? fmtKpi(r.v, c) : '—', c.unit ? el('small', {}, c.unit) : '');
+  val.className = `k-val size-${c.size || 'm'}`;
+  val.style.color = c.color || '';
+  node.querySelector('.wg-body').style.textAlign = c.align || 'left';
+  const mode = c.sub || 'none';
+  const txt = mode === 'detail' ? `${r.lyr ? r.lyr.name : 'Capa no disponible'} · ${STAT_LABEL[c.stat]} · n=${r.n}` : mode === 'text' ? (c.subText || '') : '';
+  sub.textContent = txt; sub.hidden = !txt;
+  requestAnimationFrame(() => fitKpi(val));
+}
+/* Achica el número hasta que quepa entero en el ancho del widget */
+function fitKpi(val){
+  if (!val.isConnected) return;
+  val.style.fontSize = '';
+  let fs = parseFloat(getComputedStyle(val).fontSize);
+  while (val.scrollWidth > val.clientWidth + 1 && fs > 11){ fs -= 1; val.style.fontSize = fs + 'px'; }
+}
 function refreshWidgets(){
   widgets.forEach(w => {
     const node = nodes.get(w.id); if (!node) return;
-    if (w.type === 'kpi'){
-      const c = w.cfg, lyr = layers.find(l => l.id === c.layerId), feats = featuresOf(lyr);
-      const v = stat(feats.map(f => valueOf(f, c.field)), c.stat);
-      const val = node.querySelector('.k-val'); val.innerHTML = '';
-      val.append(Number.isFinite(v) ? fmtBig(v) : '—', c.unit ? el('small', {}, c.unit) : '');
-      node.querySelector('.k-sub').textContent = `${lyr ? lyr.name : 'Capa no disponible'} · ${STAT_LABEL[c.stat]} · n=${feats.length}`;
-    } else if (w.type === 'chart'){
-      const inst = chartInst.get(w.id), lyr = layers.find(l => l.id === w.cfg.layerId);
-      node.querySelector('.c-sub').textContent = subFor(w.cfg, lyr);
-      if (inst){ const { labels, data } = chartData(w.cfg); inst.data.labels = labels; inst.data.datasets[0].data = data; inst.update('none'); }
+    if (w.type === 'kpi') paintKpi(node, w.cfg, kpiValue(w.cfg));
+    else if (w.type === 'chart'){
+      const inst = chartInst.get(w.id), lyr = layers.find(l => l.id === w.cfg.layerId), sub = node.querySelector('.c-sub');
+      sub.textContent = w.cfg.showSub ? subFor(w.cfg, lyr) : ''; sub.hidden = !w.cfg.showSub;
+      if (inst){
+        const { labels, data } = chartData(w.cfg);
+        inst.data.labels = labels; inst.data.datasets[0].data = data;
+        const radial = w.cfg.type === 'pie' || w.cfg.type === 'doughnut', cols = chartColors(w.cfg, lyr, labels, radial);
+        if (w.cfg.type !== 'line') inst.data.datasets[0].backgroundColor = cols;
+        inst.update('none');
+      }
     }
   });
+}
+/* Etiquetas de valor dibujadas sobre las barras o sectores */
+const valueLabelsPlugin = {
+  id:'gtValues',
+  afterDatasetsDraw(chart, args, opts){
+    if (!opts || !opts.show) return;
+    const { ctx } = chart, ds = chart.data.datasets[0], meta = chart.getDatasetMeta(0);
+    ctx.save(); ctx.font = '600 10px Archivo, system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    meta.data.forEach((elm, i) => {
+      const v = ds.data[i]; if (v == null || !Number.isFinite(+v)) return;
+      const txt = fmtBig(+v);
+      let x, y, color = opts.color;
+      if (elm.startAngle != null){
+        const p = elm.tooltipPosition(); x = p.x; y = p.y;
+        if (elm.endAngle - elm.startAngle < 0.25) return;
+        const bg = Array.isArray(ds.backgroundColor) ? ds.backgroundColor[i] : ds.backgroundColor; color = /^#/.test(bg) ? inkFor(bg) : color;
+      } else if (chart.options.indexAxis === 'y'){ x = elm.x + 6 + ctx.measureText(txt).width / 2; y = elm.y; }
+      else { x = elm.x; y = elm.y - 8; }
+      ctx.fillStyle = color; ctx.fillText(txt, x, y);
+    });
+    ctx.restore();
+  }
+};
+function chartColors(c, lyr, labels, radial){
+  const pal = palette(), n = labels.length;
+  const layerColor = lyr && lyr.style ? (lyr.style.mode === 'single' ? lyr.style.fill : lyr.color) : pal[0];
+  const mode = c.colorMode || 'auto';
+  if (mode === 'single'){
+    if (!radial) return c.color || layerColor;
+    const base = c.color || layerColor;   // en torta y anillo: tonos del mismo color
+    return labels.map((_, i) => lerpStops(['#ffffff', base, '#000000'], .25 + .5 * (n > 1 ? i / (n - 1) : .5)));
+  }
+  if (mode === 'ramp') return rampColors(c.ramp || 'viridis', Math.max(1, n), c.reverse);
+  const sym = catColors(lyr, c, labels);
+  if (mode === 'symbology' || (mode === 'auto' && sym)) return sym || (radial ? labels.map((_, i) => pal[i % 8]) : layerColor);
+  return radial ? labels.map((_, i) => pal[i % 8]) : layerColor;
 }
 function makeChart(w){
   const node = nodes.get(w.id), c = w.cfg; if (!node) return;
   const old = chartInst.get(w.id); if (old) old.destroy();
   const canvas = node.querySelector('canvas'), lyr = layers.find(l => l.id === c.layerId);
   const { labels, data } = chartData(c);
-  const pal = palette(), grid = cssVar('--line'), surf = cssVar('--surface');
+  const grid = cssVar('--line'), surf = cssVar('--surface') || '#ffffff';
+  const ink = getComputedStyle(node).getPropertyValue('--muted').trim() || cssVar('--muted');
   Chart.defaults.font.family = 'Archivo, system-ui, sans-serif';
-  Chart.defaults.color = cssVar('--muted');
+  Chart.defaults.color = ink;
   const radial = c.type === 'pie' || c.type === 'doughnut';
-  const color = lyr && lyr.color && !lyr.color.startsWith('var') ? (lyr.style && lyr.style.mode === 'single' ? lyr.style.fill : lyr.color) : pal[0];
+  const colors = chartColors(c, lyr, labels, radial);
+  const lineColor = Array.isArray(colors) ? colors[0] : colors;
+  const showLegend = c.legend === 'show' ? true : c.legend === 'hide' ? false : radial;
+  const showGrid = c.grid !== false;
   chartInst.set(w.id, new Chart(canvas, {
     type: radial ? c.type : (c.type === 'line' ? 'line' : 'bar'),
     data: { labels, datasets: [{
       label: fieldLabel(c.valField), data,
-      backgroundColor: catColors(lyr, c, labels) || (radial ? labels.map((_, i) => pal[i % 8]) : (c.type === 'line' ? color + '33' : color)),
-      borderColor: radial ? surf : color, borderWidth: radial ? 2 : (c.type === 'line' ? 2 : 0),
-      borderRadius: radial ? 0 : 3, fill: c.type === 'line', tension: .3, pointRadius: 3, pointBackgroundColor: color,
+      backgroundColor: c.type === 'line' ? (/^#/.test(lineColor) ? lineColor + '33' : lineColor) : colors,
+      borderColor: radial ? (surf.startsWith('#') ? surf : '#ffffff') : lineColor, borderWidth: radial ? 2 : (c.type === 'line' ? 2 : 0),
+      borderRadius: radial ? 0 : 3, fill: c.type === 'line', tension: .3, pointRadius: 3, pointBackgroundColor: lineColor,
       barPercentage: c.type === 'hist' ? 1 : .8, categoryPercentage: c.type === 'hist' ? 1 : .8
     }]},
     options: {
       responsive: true, maintainAspectRatio: false, animation: { duration: 250 }, indexAxis: c.type === 'hbar' ? 'y' : 'x',
-      plugins: { legend: { display: radial, position:'right', labels: { boxWidth: 10, font: { size: 11 } } },
-        tooltip: { callbacks: { label: ctx => ` ${fmt.format(ctx.parsed.y ?? ctx.parsed.x ?? ctx.parsed)}` } } },
+      layout: { padding: { top: c.values === 'show' && !radial ? 14 : 0, right: c.values === 'show' && c.type === 'hbar' ? 36 : 0 } },
+      plugins: { legend: { display: showLegend, position: radial ? 'right' : 'bottom', labels: { boxWidth: 10, font: { size: 11 } } },
+        tooltip: { callbacks: { label: ctx => ` ${fmt.format(ctx.parsed.y ?? ctx.parsed.x ?? ctx.parsed)}` } },
+        gtValues: { show: c.values === 'show', color: getComputedStyle(node).getPropertyValue('--ink').trim() || cssVar('--ink') } },
       scales: radial ? {} : {
-        x: { grid: { color: c.type === 'hbar' ? grid : 'transparent' }, ticks: { font: { size: 10 }, maxRotation: 45, callback: function(v){ const l = c.type === 'hbar' ? fmtBig(v) : this.getLabelForValue(v); return String(l).length > 14 ? String(l).slice(0, 13) + '…' : l; } } },
-        y: { grid: { color: c.type === 'hbar' ? 'transparent' : grid }, beginAtZero: true, ticks: { font: { size: 10 }, callback: function(v){ return c.type === 'hbar' ? this.getLabelForValue(v) : fmtBig(v); } } }
+        x: { grid: { color: c.type === 'hbar' && showGrid ? grid : 'transparent' }, ticks: { font: { size: 10 }, maxRotation: 45, callback: function(v){ const l = c.type === 'hbar' ? fmtBig(v) : this.getLabelForValue(v); return String(l).length > 14 ? String(l).slice(0, 13) + '…' : l; } } },
+        y: { grid: { color: c.type !== 'hbar' && showGrid ? grid : 'transparent' }, beginAtZero: true, ticks: { font: { size: 10 }, callback: function(v){ return c.type === 'hbar' ? this.getLabelForValue(v) : fmtBig(v); } } }
       }
-    }
+    },
+    plugins: [valueLabelsPlugin]
   }));
 }
 
@@ -713,7 +932,61 @@ function configure(w){
   if (w.type === 'kpi') openKpiDialog(w);
   else if (w.type === 'chart') openChartDialog(w);
   else if (w.type === 'text') openTextDialog(w);
+  else if (w.type === 'image') openImageDialog(w);
 }
+
+/* ---------- Widget Coordenadas ---------- */
+const coordState = { fixed:null, capture:false, marker:null };
+const coordLayer = L.layerGroup().addTo(map);
+function mountCoords(body){
+  const rows = el('div', { class:'co-rows' });
+  Object.entries(COORD_FORMATS).forEach(([k, n]) => rows.append(el('div', { class:'co-row', 'data-fmt':k },
+    el('span', { class:'co-lab' }, n, el('span', { class:'co-epsg' })), el('span', { class:'co-val' }, '—'),
+    el('button', { class:'icon-btn', type:'button', title:'Copiar', 'aria-label':`Copiar ${n}`, onclick:() => {
+      const p = coordState.fixed || lastCursor; if (!p) return toast('Primero mueve el cursor o fija un punto.');
+      copyText(plainCoord(p.lat, p.lng, k));
+    } }, svg(ICON.copy)))));
+  const status = el('div', { class:'co-status', id:'coStatus' });
+  const capBtn = el('button', { class:'btn', type:'button', id:'coCapture', onclick:() => {
+    if (coordState.fixed){ coordState.fixed = null; coordLayer.clearLayers(); updateCoordsWidget(); return; }
+    coordState.capture = !coordState.capture; map.getContainer().classList.toggle('capturing', coordState.capture); updateCoordsWidget();
+  } });
+  const zone = el('select', { id:'coZone', 'aria-label':'Zona UTM si no la escribes' }, ...[19, 18, 17, 12].map(z => el('option', { value:z }, `Zona ${z}S`)));
+  const input = el('input', { type:'text', id:'coInput', placeholder:'-33.4489, -70.6693 · 19S 346512 6297123', spellcheck:'false', 'aria-label':'Coordenada a buscar' });
+  const go = () => {
+    try {
+      const r = parseCoord(input.value, { datum:'sirgas', zone: +zone.value, hemi:'S' });
+      fixCoord(L.latLng(r.lat, r.lon), true);
+    } catch (e){ toast(e.message); }
+  };
+  input.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); go(); } });
+  body.append(rows, el('div', { class:'co-actions' }, capBtn, status),
+    el('div', { class:'co-goto' }, el('span', { class:'label' }, 'Ir a coordenada'), input,
+      el('div', { class:'co-goto-row' }, zone, el('button', { class:'btn primary', type:'button', onclick: go }, 'Ir'))),
+    el('div', { class:'formats' }, 'Acepta grados decimales, GMS (33°26′56″S 70°40′09″O) o UTM en metros. Todas las coordenadas están en SIRGAS-Chile 2025 (IGM, época 2025.0, elipsoide GRS 1980).'));
+  setTimeout(updateCoordsWidget, 0);
+}
+function fixCoord(ll, zoom){
+  coordState.fixed = ll; coordState.capture = false; map.getContainer().classList.remove('capturing');
+  coordLayer.clearLayers();
+  L.circleMarker(ll, { radius:7, color:'#ffffff', weight:2, fillColor: cssVar('--accent'), fillOpacity:1, pane:'markerPane' }).addTo(coordLayer);
+  L.circleMarker(ll, { radius:14, color: cssVar('--accent'), weight:1.5, fill:false, pane:'markerPane' }).addTo(coordLayer);
+  if (zoom) map.setView(ll, Math.max(map.getZoom(), 14));
+  updateCoordsWidget();
+}
+function updateCoordsWidget(){
+  const rows = document.querySelectorAll('.co-row'); if (!rows.length) return;
+  const p = coordState.fixed || lastCursor;
+  rows.forEach(r => {
+    r.querySelector('.co-val').textContent = p ? formatCoord(p.lat, p.lng, r.dataset.fmt) : '—';
+    const code = p ? epsgFor(r.dataset.fmt, p.lat, p.lng) : null, tag = r.querySelector('.co-epsg');
+    if (tag) tag.textContent = code ? `EPSG ${code}` : '';
+  });
+  const st = $('#coStatus'), b = $('#coCapture');
+  if (b) b.textContent = coordState.fixed ? 'Soltar punto' : coordState.capture ? 'Cancelar' : 'Fijar un punto';
+  if (st) st.textContent = coordState.fixed ? 'Punto fijado' : coordState.capture ? 'Haz clic en el mapa…' : 'Siguiendo el cursor';
+}
+map.on('click', e => { if (coordState.capture) fixCoord(e.latlng, false); });
 
 /* ---------- Modo Diseño ---------- */
 function setDesign(on){
@@ -729,7 +1002,9 @@ function setDesign(on){
 $('#btnDesign').addEventListener('click', () => setDesign(!design));
 $('#btnDesignDone').addEventListener('click', () => setDesign(false));
 document.querySelectorAll('#designBar [data-add]').forEach(b => b.addEventListener('click', () => {
-  if (b.dataset.add === 'text') openTextDialog(null); else addWidget(b.dataset.add);
+  if (b.dataset.add === 'text') openTextDialog(null);
+  else if (b.dataset.add === 'image') openImageDialog(null);
+  else addWidget(b.dataset.add);
 }));
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && design && !document.querySelector('dialog[open]')) setDesign(false); });
 
@@ -770,37 +1045,75 @@ new MutationObserver(themeChanged).observe(document.documentElement, { attribute
 function serialize(){
   const c = map.getCenter();
   return {
-    basemap: baseId, view: { center:[c.lat, c.lng], zoom: map.getZoom() },
+    basemap: baseId, view: { center:[c.lat, c.lng], zoom: map.getZoom() }, theme,
     layers: layers.map(l => l.kind === 'vector'
-      ? { id:l.id, kind:'vector', name:l.name, editable:l.editable, color:l.color, style:l.style, geom:l.geom, fields:l.fields, visible:l.visible, source:l.source, sourceUrl:l.sourceUrl, db: l.db ? (({ status, ...d }) => d)(l.db) : undefined, data: l.group.toGeoJSON() }
+      ? { id:l.id, kind:'vector', name:l.name, editable:l.editable, color:l.color, style:l.style, srcCrs:l.srcCrs || undefined, geom:l.geom, fields:l.fields, visible:l.visible, source:l.source, sourceUrl:l.sourceUrl, db: l.db ? (({ status, ...d }) => d)(l.db) : undefined, data: l.group.toGeoJSON() }
       : { id:l.id, kind:'raster', name:l.name, spec:l.spec, visible:l.visible, opacity:l.opacity, sourceLabel:l.sourceLabel, bounds: l.bounds ? [[l.bounds.getSouth(), l.bounds.getWest()], [l.bounds.getNorth(), l.bounds.getEast()]] : null }),
     widgets: widgets.map(w => structuredClone(w))
   };
 }
-let saveT, dirty = false;
+/* ---------- Borrador y publicación ----------
+   'app:ID'   versión publicada: la que ven los visualizadores
+   'draft:ID' borrador: lo que guardan editores y administradores      */
+let saveT, dirty = false, hasDraft = false;
+const whenTxt = t => t ? new Intl.DateTimeFormat('es-CL', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }).format(new Date(t)) : '';
 function scheduleSave(){
   if (loading || !currentApp || !canEdit()) return;
-  dirty = true; setStatus('Cambios sin guardar…');
-  clearTimeout(saveT); saveT = setTimeout(saveNow, 700);
+  dirty = true; updateSaveUI();
 }
 function setStatus(txt, err){ const s = $('#saveStatus'); s.textContent = txt; s.classList.toggle('err', !!err); }
-/* Guarda solo el encuadre del mapa, sin marcar la aplicación como modificada */
-async function saveViewOnly(){
+function updateSaveUI(){
   if (!currentApp || !canEdit()) return;
-  try { const st = await DB.get('app:' + currentApp.id); if (st){ const c = map.getCenter(); st.view = { center:[c.lat, c.lng], zoom: map.getZoom() }; await DB.set('app:' + currentApp.id, st); } } catch {}
+  const pill = $('#pubState');
+  if (dirty){ setStatus(''); pill.textContent = 'Sin guardar'; pill.className = 'pub-state unsaved'; }
+  else if (hasDraft){ setStatus(''); pill.textContent = 'Borrador'; pill.className = 'pub-state draft'; }
+  else { setStatus(''); pill.textContent = 'Publicada'; pill.className = 'pub-state live'; }
+  pill.title = dirty ? 'Hay cambios que aún no guardas'
+    : hasDraft ? `Borrador guardado ${whenTxt(currentApp.draftAt)}. Los visualizadores ven la versión publicada${currentApp.publishedAt ? ' del ' + whenTxt(currentApp.publishedAt) : ''}.`
+    : `Publicada${currentApp.publishedAt ? ' el ' + whenTxt(currentApp.publishedAt) : ''}. Todos ven esta versión.`;
+  $('#btnSaveDraft').disabled = !dirty;
+  $('#btnPublish').disabled = !dirty && !hasDraft;
+  $('#btnDiscard').hidden = !dirty && !hasDraft;
 }
-async function saveNow(){
-  clearTimeout(saveT);
-  if (!currentApp || !canEdit() || !dirty) return;
-  dirty = false;
+async function saveDraft(silent){
+  if (!currentApp || !canEdit()) return false;
   try {
-    const st = serialize();
-    await DB.set('app:' + currentApp.id, st);
-    const a = await patchApp(currentApp.id, { updatedAt: Date.now(), stats: statsOf(st), thumb: thumbData(st) });
-    if (!a){ setStatus('La aplicación fue eliminada', true); toast('Esta aplicación fue eliminada desde el portal.'); return; }
-    setStatus('Guardado ' + new Intl.DateTimeFormat('es-CL', { hour:'2-digit', minute:'2-digit' }).format(new Date()));
-  } catch (e){ dirty = true; setStatus('No se pudo guardar', true); toast('No se pudo guardar: ' + (e.message || e)); }
+    const st = serialize(), now = Date.now();
+    await DB.set('draft:' + currentApp.id, st);
+    const a = await patchApp(currentApp.id, { draftAt: now, draftBy: S.me.id });
+    if (!a){ setStatus('La aplicación fue eliminada', true); toast('Esta aplicación fue eliminada desde el portal.'); return false; }
+    currentApp.draftAt = now; hasDraft = true; dirty = false; updateSaveUI();
+    if (!silent) toast('Borrador guardado. Los visualizadores siguen viendo la versión publicada.');
+    return true;
+  } catch (e){ setStatus('No se pudo guardar', true); toast('No se pudo guardar: ' + (e.message || e)); return false; }
 }
+async function publish(){
+  if (!await confirmAsk('Publicar la aplicación', 'Todas las personas con acceso verán esta versión desde ahora.', 'Publicar', false)) return;
+  try {
+    const st = serialize(), now = Date.now();
+    await DB.set('app:' + currentApp.id, st);
+    await DB.del('draft:' + currentApp.id);
+    const a = await patchApp(currentApp.id, { publishedAt: now, publishedBy: S.me.id, draftAt: null, updatedAt: now, stats: statsOf(st), thumb: thumbData(st) });
+    if (!a){ toast('Esta aplicación fue eliminada desde el portal.'); return; }
+    Object.assign(currentApp, { publishedAt: now, draftAt: null });
+    hasDraft = false; dirty = false; updateSaveUI();
+    toast('Aplicación publicada');
+  } catch (e){ toast('No se pudo publicar: ' + (e.message || e)); }
+}
+async function discardDraft(){
+  if (!await confirmAsk('Descartar el borrador', 'Se pierden los cambios no publicados y vuelves a la versión publicada.', 'Descartar')) return;
+  await DB.del('draft:' + currentApp.id);
+  await patchApp(currentApp.id, { draftAt: null });
+  currentApp.draftAt = null; hasDraft = false; dirty = false;
+  if (design) setDesign(false);
+  await loadState((await DB.get('app:' + currentApp.id)) || emptyState());
+  await new Promise(r => setTimeout(r, 60)); dirty = false; updateSaveUI();
+  toast('Borrador descartado');
+}
+$('#btnSaveDraft').addEventListener('click', () => saveDraft(false));
+$('#btnPublish').addEventListener('click', publish);
+$('#btnDiscard').addEventListener('click', discardDraft);
+document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && currentApp && canEdit()){ e.preventDefault(); if (dirty) saveDraft(false); } });
 
 function clearWorkspace(){
   map.closePopup(); map.pm.removeControls();
@@ -821,6 +1134,7 @@ async function loadState(st){
       } catch (e){ toast(`No se pudo cargar "${l.name}": ${e.message}`); }
     }
     colorIdx = layers.length;
+    applyTheme(st.theme);
     widgets = Array.isArray(st.widgets) ? structuredClone(st.widgets) : defaultWidgets(st);
     widgets.forEach(w => { if (w.type === 'basemaps' && (w.h === 250 || w.h === 240 || w.h === 340)) w.h = 348; });   // tamaño anterior por defecto: no cabían todos
     if (st.view) map.setView(st.view.center, st.view.zoom, { animate:false });
@@ -828,6 +1142,7 @@ async function loadState(st){
     layers.forEach(l => l.kind === 'vector' && l.group.eachLayer(f => { f.options.pmIgnore = !editAllowed(l); }));
   } finally { loading = false; }
   renderWidgets(); refreshEditing(); renderLayers();
+  applyLayerOrder();
   layers.filter(l => l.db).forEach(l => refreshDbLayer(l, true));   // datos al día desde la base
 }
 
@@ -836,7 +1151,7 @@ async function loadState(st){
    ================================================================= */
 const dlgLayer = $('#dlgLayer');
 let tab = 'file', pendingFile = null, ags = null;
-const DROP_HTML = '<b>Arrastra un archivo aquí</b> o haz clic para elegirlo<br><span class="formats">GeoJSON · KML · GPX · Shapefile (.zip) · CSV con lat/lon</span>';
+const DROP_HTML = '<b>Arrastra archivos aquí</b> o haz clic para elegirlos<br><span class="formats">Shapefile (.zip o sus partes) · GeoPackage · File Geodatabase (.gdb.zip) · GeoJSON · KML/KMZ · GPX · CSV</span>';
 function setTab(t){
   tab = t;
   document.querySelectorAll('#dlgLayer [role=tab]').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === t));
@@ -850,7 +1165,7 @@ document.querySelectorAll('#dlgLayer [role=tab]').forEach(b => b.addEventListene
 $('#urlType').addEventListener('change', () => { $('#wmsLayersField').hidden = $('#urlType').value !== 'wms'; setTab('url'); });
 function openAddLayer(){
   if (!canEdit()) return;
-  pendingFile = null; $('#drop').innerHTML = DROP_HTML;
+  pendingFile = null; pendingFiles = null; resetAnalysis(); $('#drop').innerHTML = DROP_HTML;
   $('#layerName').value = ''; $('#layerName').dataset.auto = '1'; $('#layerEditable').checked = false; $('#dbFilter').value = ''; $('#dbWrite').checked = false; $('#dbRefresh').value = '0';
   ags = null; $('#agsInfo').hidden = true; $('#agsModeField').hidden = true; $('#agsWhereField').hidden = true; $('#agsBandsField').hidden = true; $('#agsBands').value = ''; $('#agsMode').innerHTML = '';
   const sel = $('#newColor'); sel.innerHTML = '';
@@ -863,9 +1178,76 @@ const drop = $('#drop');
 drop.addEventListener('click', () => $('#fileInput').click());
 drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]); });
-$('#fileInput').addEventListener('change', e => { if (e.target.files[0]) pickFile(e.target.files[0]); e.target.value = ''; });
-function pickFile(f){ pendingFile = f; drop.innerHTML = `<b>${esc(f.name)}</b><br><span class="formats">${fmt.format(f.size / 1024)} KB · listo para agregar</span>`; if (!$('#layerName').value) $('#layerName').value = f.name.replace(/\.[^.]+$/, ''); }
+drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files.length) pickFiles([...e.dataTransfer.files]); });
+drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); $('#fileInput').click(); } });
+$('#fileInput').addEventListener('change', e => { if (e.target.files.length) pickFiles([...e.target.files]); e.target.value = ''; });
+$('#btnPickFolder').addEventListener('click', () => $('#folderInput').click());
+$('#folderInput').addEventListener('change', e => { if (e.target.files.length) pickFiles([...e.target.files]); e.target.value = ''; });
+
+/* ---------- Análisis del sistema de referencia al importar ---------- */
+let pendingFiles = null, analysis = null;
+const isGdalInput = files => files.some(f => /\.(zip|gpkg|shp|dbf|shx|gdbtable)$/i.test(f.name) || (f.webkitRelativePath && /\.gdb\//i.test(f.webkitRelativePath)));
+async function needsGdalGeojson(f){
+  try {
+    const j = JSON.parse(await readText(f));
+    const crsName = j.crs && j.crs.properties && j.crs.properties.name || '';
+    if (crsName && !/CRS84|4326/.test(crsName)) return true;
+    const c = firstLonLat(((j.features || [])[0] || {}).geometry || j.geometry);
+    return !!(c && (Math.abs(c[0]) > 180 || Math.abs(c[1]) > 90));
+  } catch { return false; }
+}
+function resetAnalysis(){ if (analysis) gdalClose(analysis); analysis = null; const p = $('#impAnalysis'); p.hidden = true; p.innerHTML = ''; }
+async function pickFiles(files){
+  resetAnalysis();
+  pendingFiles = files; pendingFile = files[0];
+  const label = files.length > 1 && !files[0].webkitRelativePath ? `${files.length} archivos` : (files[0].webkitRelativePath ? files[0].webkitRelativePath.split('/')[0] : files[0].name);
+  drop.innerHTML = `<b>${esc(label)}</b><br><span class="formats">${fmt.format(files.reduce((a, f) => a + f.size, 0) / 1024)} KB</span>`;
+  if (!$('#layerName').value) $('#layerName').value = label.replace(/\.(gdb\.zip|zip|gpkg|geojson|json|kml|kmz|gpx|csv|shp)$/i, '');
+  const gj = files.length === 1 && /\.(geojson|json)$/i.test(files[0].name) && await needsGdalGeojson(files[0]);
+  if (!isGdalInput(files) && !gj) return;
+  const panel = $('#impAnalysis'); panel.hidden = false;
+  panel.innerHTML = '<div class="imp-status">Analizando el sistema de referencia…</div>';
+  const ok = $('#btnLayerOk'); ok.disabled = true;
+  try {
+    analysis = await gdalAnalyze(files, msg => { panel.innerHTML = `<div class="imp-status">${esc(msg)}</div>`; });
+    renderAnalysis();
+  } catch (e){
+    analysis = null;
+    const zipShp = files.length === 1 && /\.zip$/i.test(files[0].name);
+    panel.innerHTML = '';
+    panel.append(el('div', { class:'err' }, e.message), zipShp ? el('div', { class:'formats' }, 'Se intentará agregar igual con el lector simple de Shapefile, que usa el .prj si viene incluido.') : null);
+  } finally { ok.disabled = false; }
+}
+function crsLine(l){
+  if (!l.crs) return el('div', { class:'imp-crs warn' }, 'El archivo no indica su sistema de referencia. Elige en cuál están las coordenadas:');
+  const code = l.crs.epsg ? ` · EPSG ${l.crs.epsg}` : '';
+  return el('div', { class:'imp-crs' }, el('b', {}, l.crs.name + code), l.crs.isWgs84 ? ' · ya está en WGS84' : ' → se transforma a WGS84 para el mapa');
+}
+function renderAnalysis(){
+  const panel = $('#impAnalysis'); panel.innerHTML = '';
+  const KIND = { shp:'Shapefile', gpkg:'GeoPackage', gdb:'File Geodatabase', geojson:'GeoJSON' };
+  panel.append(el('div', { class:'imp-head' }, `${KIND[analysis.kind] || 'Archivo'} · ${analysis.layers.length} capa${analysis.layers.length === 1 ? '' : 's'} con geometría`));
+  analysis.layers.forEach((l, i) => {
+    const id = 'impL' + i, cb = el('input', { type:'checkbox', id, checked:true });
+    l._cb = cb;
+    const row = el('div', { class:'imp-layer' },
+      el('label', { class:'check', for:id }, cb, el('b', {}, l.title), el('span', { class:'imp-meta' }, `${fmt.format(l.count)} · ${l.geomType}`)),
+      crsLine(l));
+    if (!l.crs){
+      const sel = el('select', { 'aria-label':`Sistema de ${l.title}` }); fillCrsSelect(sel, guessCrsFromExtent(l.extent)); l._sel = sel;
+      row.append(sel);
+    }
+    panel.append(row);
+  });
+  if (analysis.layers.length > 1) $('#layerName').value = '';
+  $('#layerName').placeholder = analysis.layers.length > 1 ? 'Se usa el nombre de cada capa' : 'Se toma del archivo si lo dejas vacío';
+}
+async function readKmz(f){
+  const JSZip = await loadJSZip(), z = await JSZip.loadAsync(f);
+  const k = Object.keys(z.files).find(n => /\.kml$/i.test(n));
+  if (!k) throw new Error('El KMZ no contiene un archivo KML.');
+  return toGeoJSON.kml(new DOMParser().parseFromString(await z.files[k].async('string'), 'text/xml'));
+}
 function normalizeFC(obj){
   if (!obj) throw new Error('El archivo está vacío.');
   if (obj.type === 'FeatureCollection') return obj;
@@ -1082,12 +1464,30 @@ $('#btnLayerOk').addEventListener('click', async () => {
   const name = $('#layerName').value.trim(), editable = $('#layerEditable').checked;
   const ok = $('#btnLayerOk'); ok.disabled = true;
   try {
-    if (tab === 'file'){
+    if (tab === 'file' && analysis){
+      const chosen = analysis.layers.filter(l => l._cb.checked);
+      if (!chosen.length) throw new Error('Marca al menos una capa.');
+      let last = null, n = 0;
+      for (const l of chosen){
+        err.style.color = 'var(--muted)'; err.textContent = `Transformando ${l.title}… (${++n} de ${chosen.length})`;
+        const override = l.crs ? null : l._sel.value;
+        const fc = await gdalLayerToWgs84(analysis, l, override);
+        if (!fc.features || !fc.features.length) continue;
+        const src = l.crs ? { name: l.crs.name, epsg: l.crs.epsg, id: (crsByEpsg(l.crs.epsg) || {}).id || null } : { name: CRS_BY_ID[override].name, epsg: CRS_BY_ID[override].epsg, id: override };
+        last = addVectorLayer(fc, { name: chosen.length > 1 || !name ? l.title : name, editable, srcCrs: src });
+      }
+      err.style.color = ''; err.textContent = '';
+      if (!last) throw new Error('Las capas elegidas no tienen entidades.');
+      resetAnalysis();
+      const b = last.group.getBounds(); if (b.isValid()) map.fitBounds(b, { padding:[30,30], maxZoom: 16 });
+      toast(chosen.length > 1 ? `${chosen.length} capas agregadas y transformadas a WGS84` : `Capa agregada: ${last.name}`);
+    } else if (tab === 'file'){
       if (!pendingFile) throw new Error('Elige un archivo primero.');
       const ext = pendingFile.name.split('.').pop().toLowerCase();
       let fcs = [];
       if (ext === 'geojson' || ext === 'json') fcs = [normalizeFC(JSON.parse(await readText(pendingFile)))];
       else if (ext === 'kml') fcs = [toGeoJSON.kml(new DOMParser().parseFromString(await readText(pendingFile), 'text/xml'))];
+      else if (ext === 'kmz') fcs = [await readKmz(pendingFile)];
       else if (ext === 'gpx') fcs = [toGeoJSON.gpx(new DOMParser().parseFromString(await readText(pendingFile), 'text/xml'))];
       else if (ext === 'zip'){ const r = await shp(await readBuf(pendingFile)); fcs = Array.isArray(r) ? r : [r]; }
       else if (ext === 'csv') fcs = [csvToFC(await readText(pendingFile))];
@@ -1154,6 +1554,16 @@ $('#chLayer').addEventListener('change', syncChartForm);
 $('#chType').addEventListener('change', syncChartForm);
 $('#chVal').addEventListener('change', () => { $('#chAgg').disabled = $('#chVal').value === '__count'; });
 let editingChart = null, editingKpi = null;
+Object.entries(RAMPS).forEach(([k, r]) => $('#chRamp').append(el('option', { value:k }, r.name)));
+function syncChartLook(){
+  const m = $('#chColorMode').value, t = $('#chType').value;
+  $('#chColorField').hidden = m !== 'single'; $('#chRampField').hidden = m !== 'ramp'; $('#chRampPrev').hidden = m !== 'ramp';
+  $('#chRampPrev').style.background = rampCss($('#chRamp').value);
+  $('#chOrderRow').hidden = t === 'hist';
+  $('#chOthersRow').hidden = t === 'hist' || $('#chTop').value === '0';
+}
+['#chColorMode', '#chRamp', '#chTop'].forEach(s => $(s).addEventListener('change', syncChartLook));
+$('#chType').addEventListener('change', syncChartLook);
 function openChartDialog(w){
   if (!canEdit()) return;
   if (!layers.some(l => l.kind === 'vector')) return toast('Agrega primero una capa vectorial');
@@ -1161,62 +1571,280 @@ function openChartDialog(w){
   dlgChart.querySelector('.dlg-head h2').textContent = w ? 'Editar gráfico' : 'Nuevo gráfico';
   $('#btnChartOk').textContent = w ? 'Guardar' : 'Crear gráfico';
   fillLayerSelect($('#chLayer')); $('#chErr').textContent = '';
-  const c = w ? w.cfg : null;
-  if (c && [...$('#chLayer').options].some(o => o.value === c.layerId)) $('#chLayer').value = c.layerId;
-  $('#chType').value = c ? c.type : 'bar';
+  const c = w ? w.cfg : {};
+  if (c.layerId && [...$('#chLayer').options].some(o => o.value === c.layerId)) $('#chLayer').value = c.layerId;
+  $('#chType').value = c.type || 'bar';
   $('#chCat').innerHTML = ''; $('#chVal').innerHTML = '';
   syncChartForm();
-  if (c){
+  if (w){
     if ([...$('#chCat').options].some(o => o.value === c.catField)) $('#chCat').value = c.catField;
     if ([...$('#chVal').options].some(o => o.value === c.valField)) $('#chVal').value = c.valField;
     $('#chAgg').value = c.agg || 'sum'; $('#chAgg').disabled = $('#chVal').value === '__count';
   }
-  $('#chTitle').value = c ? c.title : '';
-  dlgChart.showModal();
+  $('#chTitle').value = c.title || '';
+  $('#chSort').value = c.sort || (c.type === 'line' ? 'alpha' : 'desc'); $('#chTop').value = String(c.top || 0); $('#chOthers').checked = c.others !== false;
+  $('#chColorMode').value = c.colorMode || 'auto'; $('#chColor').value = toHex(c.color || cssVar('--accent')); $('#chRamp').value = c.ramp || 'viridis';
+  $('#chLegend').value = c.legend || 'auto'; $('#chValues').value = c.values || 'none';
+  $('#chGrid').checked = c.grid !== false; $('#chSub').checked = !!c.showSub;
+  syncChartLook(); dlgChart.showModal();
 }
 $('#btnAddChart').addEventListener('click', () => openChartDialog(null));
 $('#btnChartOk').addEventListener('click', () => {
-  const c = { layerId: $('#chLayer').value, type: $('#chType').value, catField: $('#chCat').value, valField: $('#chVal').value, agg: $('#chAgg').value };
+  const c = { layerId: $('#chLayer').value, type: $('#chType').value, catField: $('#chCat').value, valField: $('#chVal').value, agg: $('#chAgg').value,
+    sort: $('#chSort').value, top: +$('#chTop').value, others: $('#chOthers').checked,
+    colorMode: $('#chColorMode').value, color: $('#chColor').value, ramp: $('#chRamp').value,
+    legend: $('#chLegend').value, values: $('#chValues').value, grid: $('#chGrid').checked, showSub: $('#chSub').checked };
   if (!c.valField) return $('#chErr').textContent = 'La capa no tiene campos numéricos para este gráfico.';
   if (c.type !== 'hist' && !c.catField) return $('#chErr').textContent = 'Elige un campo para agrupar.';
   c.title = $('#chTitle').value.trim() || (c.type === 'hist' ? `Distribución de ${fieldLabel(c.valField)}` : `${c.valField === '__count' ? 'Entidades' : fieldLabel(c.valField)} por ${c.catField}`);
   dlgChart.close();
-  if (editingChart){ editingChart.cfg = c; renderWidgets(); if (widgets.some(x => x.type === 'layers')) renderLayers(); scheduleSave(); toast('Gráfico actualizado'); }
+  if (editingChart){ editingChart.cfg = c; rerenderAll(); scheduleSave(); toast('Gráfico actualizado'); }
   else { addWidget('chart', { cfg: c }); toast('Gráfico agregado: arrástralo a donde quieras'); }
 });
 const dlgKpi = $('#dlgKpi');
 function syncKpiStat(){ const isCount = $('#kField').value === '__count'; $('#kStat').disabled = isCount; if (isCount) $('#kStat').value = 'count'; }
 function syncKpiForm(){ fillFieldSelect($('#kField'), layers.find(l => l.id === $('#kLayer').value), { virtual:true, numeric:true }); syncKpiStat(); }
-$('#kLayer').addEventListener('change', syncKpiForm);
-$('#kField').addEventListener('change', syncKpiStat);
+function readKpiForm(){
+  const field = $('#kField').value, st = field === '__count' ? 'count' : $('#kStat').value, lyr = layers.find(l => l.id === $('#kLayer').value);
+  return { layerId: lyr ? lyr.id : null, field, stat: st,
+    unit: $('#kUnit').value.trim() || (editingKpi || $('#kUnit').dataset.touched ? '' : (field === '__area' ? 'ha' : field === '__length' ? 'km' : '')),
+    label: $('#kLabel').value.trim() || (lyr ? (field === '__count' ? `Entidades en ${lyr.name}` : `${fieldLabel(field)} (${STAT_LABEL[st]})`) : 'Indicador'),
+    abbr: $('#kAbbr').value, decimals: $('#kDec').value, prefix: $('#kPrefix').value,
+    sub: $('#kSub').value, subText: $('#kSubText').value.trim(),
+    size: $('#kSize').value, align: $('#kAlign').value, color: $('#kColorOn').checked ? $('#kColor').value : '' };
+}
+/* Vista previa del indicador mientras se configura */
+function paintKpiPreview(){
+  $('#kSubTextField').hidden = $('#kSub').value !== 'text';
+  $('#kColor').disabled = !$('#kColorOn').checked;
+  const c = readKpiForm(), box = $('#kPreview');
+  box.innerHTML = '';
+  if (!c.field){ box.append(el('span', { class:'ml-more' }, 'Elige un campo')); return; }
+  const fake = el('div', { class:'wg-kpi-prev' }, el('div', { class:'wg-body' }, el('div', { class:'k-val' }), el('div', { class:'k-sub' })));
+  box.append(el('div', { class:'kp-label' }, c.label), fake);
+  paintKpi(fake, c, kpiValue(c));
+}
+$('#kLayer').addEventListener('change', () => { syncKpiForm(); paintKpiPreview(); });
+$('#kField').addEventListener('change', () => { syncKpiStat(); paintKpiPreview(); });
+$('#kUnit').addEventListener('input', e => { e.target.dataset.touched = '1'; });
+['#kStat', '#kLabel', '#kAbbr', '#kDec', '#kPrefix', '#kUnit', '#kSub', '#kSubText', '#kSize', '#kAlign', '#kColorOn', '#kColor'].forEach(s => $(s).addEventListener('input', paintKpiPreview));
 function openKpiDialog(w){
   if (!canEdit()) return;
   if (!layers.some(l => l.kind === 'vector')) return toast('Agrega primero una capa vectorial');
-  editingKpi = w;
+  editingKpi = w; delete $('#kUnit').dataset.touched;
   dlgKpi.querySelector('.dlg-head h2').textContent = w ? 'Editar indicador' : 'Nuevo indicador';
   $('#btnKpiOk').textContent = w ? 'Guardar' : 'Crear indicador';
   fillLayerSelect($('#kLayer')); $('#kErr').textContent = '';
-  const c = w ? w.cfg : null;
-  if (c && [...$('#kLayer').options].some(o => o.value === c.layerId)) $('#kLayer').value = c.layerId;
+  const c = w ? w.cfg : {};
+  if (c.layerId && [...$('#kLayer').options].some(o => o.value === c.layerId)) $('#kLayer').value = c.layerId;
   $('#kStat').value = 'sum';
   syncKpiForm();
-  if (c && [...$('#kField').options].some(o => o.value === c.field)){ $('#kField').value = c.field; syncKpiStat(); if (c.field !== '__count') $('#kStat').value = c.stat; }
-  $('#kLabel').value = c ? c.label : ''; $('#kUnit').value = c ? (c.unit || '') : '';
-  dlgKpi.showModal();
+  if (c.field && [...$('#kField').options].some(o => o.value === c.field)){ $('#kField').value = c.field; syncKpiStat(); if (c.field !== '__count') $('#kStat').value = c.stat; }
+  $('#kLabel').value = c.label || ''; $('#kUnit').value = c.unit || '';
+  $('#kAbbr').value = c.abbr || (w ? 'M' : 'none'); $('#kDec').value = c.decimals == null ? 'auto' : String(c.decimals);
+  $('#kPrefix').value = c.prefix || ''; $('#kSub').value = c.sub || 'none'; $('#kSubText').value = c.subText || '';
+  $('#kSize').value = c.size || 'm'; $('#kAlign').value = c.align || 'left';
+  $('#kColorOn').checked = !!c.color; $('#kColor').value = toHex(c.color || cssVar('--accent'));
+  paintKpiPreview(); dlgKpi.showModal();
 }
 $('#btnAddKpi').addEventListener('click', () => openKpiDialog(null));
 $('#btnKpiOk').addEventListener('click', () => {
-  const field = $('#kField').value; if (!field) return $('#kErr').textContent = 'Elige un campo.';
-  const st = field === '__count' ? 'count' : $('#kStat').value, lyr = layers.find(l => l.id === $('#kLayer').value);
-  const unit = $('#kUnit').value.trim() || (field === '__area' ? 'ha' : field === '__length' ? 'km' : '');
-  const cfg = { layerId: lyr.id, field, stat: st, unit, label: $('#kLabel').value.trim() || (field === '__count' ? `Entidades en ${lyr.name}` : `${fieldLabel(field)} (${STAT_LABEL[st]})`) };
+  if (!$('#kField').value) return $('#kErr').textContent = 'Elige un campo.';
+  const cfg = readKpiForm();
   dlgKpi.close();
-  if (editingKpi){ editingKpi.cfg = cfg; renderWidgets(); if (widgets.some(x => x.type === 'layers')) renderLayers(); scheduleSave(); toast('Indicador actualizado'); }
+  if (editingKpi){ editingKpi.cfg = cfg; rerenderAll(); scheduleSave(); toast('Indicador actualizado'); }
   else { addWidget('kpi', { cfg }); toast('Indicador agregado: arrástralo a donde quieras'); }
 });
 
 
 
+
+
+/* =================================================================
+   Imagen, apariencia de widgets y tema de la aplicación
+   ================================================================= */
+/* ---------- Widget Imagen ---------- */
+const dlgImage = $('#dlgImage');
+let editingImage = null, imgDraft = null;
+function loadImg(src){ return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('No se pudo leer la imagen.')); i.src = src; }); }
+/* Reduce la imagen a 1.600 px como máximo para que la aplicación no pese de más */
+async function shrinkImage(file){
+  if (!/^image\//.test(file.type)) throw new Error('El archivo no es una imagen.');
+  if (file.type === 'image/svg+xml'){
+    if (file.size > 400e3) throw new Error('El SVG pesa más de 400 KB.');
+    const src = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(file); });
+    const i = await loadImg(src); return { src, w: i.naturalWidth || 300, h: i.naturalHeight || 150 };
+  }
+  const url = URL.createObjectURL(file);
+  try {
+    const i = await loadImg(url), k = Math.min(1, 1600 / Math.max(i.naturalWidth, i.naturalHeight));
+    const c = el('canvas'); c.width = Math.round(i.naturalWidth * k); c.height = Math.round(i.naturalHeight * k);
+    c.getContext('2d').drawImage(i, 0, 0, c.width, c.height);
+    const alpha = /png|gif|webp/.test(file.type);
+    let src = c.toDataURL(alpha ? 'image/png' : 'image/jpeg', .86);
+    if (src.length > 1.5e6) src = c.toDataURL('image/webp', .82);
+    if (src.length > 2.5e6) throw new Error('La imagen sigue siendo muy pesada después de reducirla. Prueba con una más liviana.');
+    return { src, w: c.width, h: c.height };
+  } finally { URL.revokeObjectURL(url); }
+}
+function paintImgPreview(){
+  const p = $('#imPreview'); p.innerHTML = '';
+  if (imgDraft && imgDraft.src) p.append(el('img', { src: imgDraft.src, alt:'', style:`object-fit:${$('#imFit').value}` }));
+  else p.append(el('span', {}, 'Arrastra una imagen aquí o haz clic para elegirla'));
+}
+function openImageDialog(w){
+  editingImage = w; const c = w ? w.cfg : {};
+  imgDraft = w ? { src: c.src, w: c.iw, h: c.ih } : null;
+  $('#dlgImageTitle').textContent = w ? 'Editar imagen' : 'Nueva imagen';
+  $('#btnImageOk').textContent = w ? 'Guardar' : 'Agregar';
+  $('#imUrl').value = c.src && !c.src.startsWith('data:') ? c.src : '';
+  $('#imFit').value = c.fit || 'contain'; $('#imAlt').value = c.alt || ''; $('#imLink').value = c.link || ''; $('#imCaption').value = c.caption || '';
+  $('#imHead').checked = w ? !w.noHead : false; $('#imErr').textContent = '';
+  paintImgPreview(); dlgImage.showModal();
+}
+async function pickImage(file){
+  $('#imErr').textContent = ''; $('#imPreview').classList.add('busy');
+  try { imgDraft = await shrinkImage(file); $('#imUrl').value = ''; if (!$('#imAlt').value) $('#imAlt').value = file.name.replace(/\.[^.]+$/, ''); paintImgPreview(); }
+  catch (e){ $('#imErr').textContent = e.message; }
+  finally { $('#imPreview').classList.remove('busy'); }
+}
+$('#imPreview').addEventListener('click', () => $('#imFile').click());
+$('#imPreview').addEventListener('dragover', e => { e.preventDefault(); $('#imPreview').classList.add('over'); });
+$('#imPreview').addEventListener('dragleave', () => $('#imPreview').classList.remove('over'));
+$('#imPreview').addEventListener('drop', e => { e.preventDefault(); $('#imPreview').classList.remove('over'); if (e.dataTransfer.files[0]) pickImage(e.dataTransfer.files[0]); });
+$('#imFile').addEventListener('change', e => { if (e.target.files[0]) pickImage(e.target.files[0]); e.target.value = ''; });
+$('#imFit').addEventListener('change', paintImgPreview);
+$('#imUrl').addEventListener('change', async () => {
+  const u = $('#imUrl').value.trim(); if (!u) return;
+  try { const i = await loadImg(u); imgDraft = { src: u, w: i.naturalWidth, h: i.naturalHeight }; $('#imErr').textContent = ''; paintImgPreview(); }
+  catch { $('#imErr').textContent = 'No se pudo cargar la imagen desde esa dirección.'; }
+});
+$('#btnImageOk').addEventListener('click', () => {
+  if (!imgDraft || !imgDraft.src) return $('#imErr').textContent = 'Elige una imagen o escribe su dirección.';
+  const link = $('#imLink').value.trim();
+  if (link && !/^https?:\/\//.test(link)) return $('#imErr').textContent = 'El enlace debe comenzar con https://';
+  const cfg = { src: imgDraft.src, iw: imgDraft.w, ih: imgDraft.h, fit: $('#imFit').value, alt: $('#imAlt').value.trim(), link, caption: $('#imCaption').value.trim() };
+  const noHead = !$('#imHead').checked;
+  dlgImage.close();
+  if (editingImage){ editingImage.cfg = cfg; editingImage.noHead = noHead; rerenderAll(); scheduleSave(); return; }
+  const wpx = 260, hpx = Math.round(Math.min(420, Math.max(60, wpx * (imgDraft.h || 1) / (imgDraft.w || 1)))) + (noHead ? 0 : 37) + (cfg.caption ? 26 : 0);
+  addWidget('image', { cfg, noHead, h: hpx, look:{ bg:'', opacity: noHead ? 0 : 1, border: !noHead, shadow: !noHead } });
+});
+function rerenderAll(){ renderWidgets(); if (widgets.some(x => x.type === 'layers')) renderLayers(); }
+
+/* ---------- Apariencia de un widget ---------- */
+const dlgLook = $('#dlgLook');
+let lookW = null, lookBackup = null;
+function applyLook(node, w){
+  const L = w.look || {};
+  const op = L.opacity == null ? null : Math.round(L.opacity * 100);
+  const bg = L.bg || 'var(--surface)';
+  if (L.bg || op != null) node.style.setProperty('--wg-bg', op == null ? bg : `color-mix(in srgb, ${bg} ${op}%, transparent)`);
+  if (L.bg){ node.style.setProperty('--surface', 'transparent'); node.style.setProperty('--surface-2', `color-mix(in srgb, ${L.bg} 70%, ${L.text || '#888'} 8%)`); }
+  if (L.text){ node.style.setProperty('--ink', L.text); node.style.setProperty('--muted', `color-mix(in srgb, ${L.text} 72%, transparent)`); node.style.setProperty('--line', `color-mix(in srgb, ${L.text} 22%, transparent)`); }
+  node.classList.toggle('noborder', L.border === false);
+  node.classList.toggle('noshadow', L.shadow === false);
+  if (L.radius != null && L.radius !== '') node.style.setProperty('--wg-r', L.radius + 'px');
+  if (L.headBg){ node.style.setProperty('--wg-head', L.headBg); node.style.setProperty('--wg-head-ink', inkFor(L.headBg)); node.classList.add('head-color'); }
+}
+function openLook(w){
+  lookW = w; lookBackup = { look: structuredClone(w.look || {}), noHead: w.noHead, title: w.title };
+  const L = w.look || {};
+  $('#lkTitle').textContent = `Apariencia · ${widgetTitle(w)}`;
+  $('#lkBgOn').checked = !!L.bg; $('#lkBg').value = toHex(L.bg || cssVar('--surface')); $('#lkBg').disabled = !L.bg;
+  $('#lkOp').value = L.opacity == null ? 1 : L.opacity;
+  $('#lkTextOn').checked = !!L.text; $('#lkText').value = toHex(L.text || cssVar('--ink')); $('#lkText').disabled = !L.text;
+  $('#lkHeadOn').checked = !!L.headBg; $('#lkHead').value = toHex(L.headBg || cssVar('--accent')); $('#lkHead').disabled = !L.headBg;
+  $('#lkBorder').checked = L.border !== false; $('#lkShadow').checked = L.shadow !== false;
+  $('#lkRadius').value = L.radius == null ? '' : String(L.radius);
+  $('#lkShowHead').checked = !w.noHead;
+  $('#lkName').value = ['layers', 'basemaps', 'legend', 'coords', 'image', 'text'].includes(w.type) ? (w.title || '') : '';
+  $('#lkNameField').hidden = !['layers', 'basemaps', 'legend', 'coords', 'image', 'text'].includes(w.type);
+  $('#lkName').placeholder = WTYPE[w.type].name;
+  syncLookOut(); dlgLook.showModal();
+}
+function syncLookOut(){ $('#lkOpOut').textContent = Math.round($('#lkOp').value * 100) + '%'; }
+function readLook(){
+  const w = lookW;
+  w.look = {
+    bg: $('#lkBgOn').checked ? $('#lkBg').value : '',
+    opacity: +$('#lkOp').value === 1 ? null : +$('#lkOp').value,
+    text: $('#lkTextOn').checked ? $('#lkText').value : '',
+    headBg: $('#lkHeadOn').checked ? $('#lkHead').value : '',
+    border: $('#lkBorder').checked, shadow: $('#lkShadow').checked,
+    radius: $('#lkRadius').value === '' ? null : +$('#lkRadius').value
+  };
+  w.noHead = !$('#lkShowHead').checked;
+  if (!$('#lkNameField').hidden) w.title = $('#lkName').value.trim() || undefined;
+  $('#lkBg').disabled = !$('#lkBgOn').checked; $('#lkText').disabled = !$('#lkTextOn').checked; $('#lkHead').disabled = !$('#lkHeadOn').checked;
+  syncLookOut(); rerenderAll();
+}
+['#lkBgOn', '#lkBg', '#lkOp', '#lkTextOn', '#lkText', '#lkHeadOn', '#lkHead', '#lkBorder', '#lkShadow', '#lkRadius', '#lkShowHead', '#lkName'].forEach(s => $(s).addEventListener('input', readLook));
+let lookApplied = false;
+$('#btnLookOk').addEventListener('click', () => { lookApplied = true; dlgLook.close(); scheduleSave(); toast('Apariencia aplicada'); });
+$('#lkReset').addEventListener('click', () => { lookW.look = {}; lookW.noHead = lookW.type === 'image'; openLook(lookW); rerenderAll(); });
+dlgLook.addEventListener('close', () => {
+  if (!lookApplied && lookW){ lookW.look = lookBackup.look; lookW.noHead = lookBackup.noHead; lookW.title = lookBackup.title; rerenderAll(); }
+  lookApplied = false; lookW = null;
+});
+
+/* ---------- Tema de la aplicación ---------- */
+const THEMES = {
+  saf:     { name:'Verde',              accent:'#0e6e5c', header:'light' },
+  azul:    { name:'Azul institucional', accent:'#1f4e8c', header:'accent' },
+  grafito: { name:'Grafito',            accent:'#3d4a55', header:'dark' },
+  arena:   { name:'Arena',              accent:'#9a6b2f', header:'light' },
+  alerta:  { name:'Emergencia',         accent:'#b42318', header:'accent' },
+  noche:   { name:'Noche',              accent:'#3fbf9f', header:'dark', dark:true }
+};
+let theme = null;
+const defaultTheme = () => ({ preset:'saf', accent:'#0e6e5c', header:'light', radius:10, glass:false, dark:false, title:'' });
+function applyTheme(t){
+  theme = { ...defaultTheme(), ...(t || {}) };
+  const root = document.documentElement, accent = theme.accent;
+  if (theme.dark) root.dataset.theme = 'dark'; else if (root.dataset.theme === 'dark' && root.dataset.gtTheme) delete root.dataset.theme;
+  root.dataset.gtTheme = '1';
+  const custom = theme.preset !== 'saf' || theme.accent !== '#0e6e5c';
+  ['--accent', '--accent-soft', '--accent-ink'].forEach(v => root.style.removeProperty(v));
+  if (custom){
+    root.style.setProperty('--accent', accent);
+    root.style.setProperty('--accent-soft', `color-mix(in srgb, ${accent} 16%, var(--surface))`);
+    root.style.setProperty('--accent-ink', inkFor(accent));
+  }
+  root.style.setProperty('--wg-r', (theme.radius ?? 10) + 'px');
+  const top = $('header.top');
+  top.classList.toggle('hdr-accent', theme.header === 'accent'); top.classList.toggle('hdr-dark', theme.header === 'dark');
+  stage.classList.toggle('glass', !!theme.glass);
+  $('#crumbName').textContent = theme.title || (currentApp ? currentApp.name : '');
+}
+function resetThemeRoot(){
+  const root = document.documentElement;
+  ['--accent', '--accent-soft', '--accent-ink', '--wg-r'].forEach(v => root.style.removeProperty(v));
+  if (root.dataset.gtTheme && theme && theme.dark) delete root.dataset.theme;
+}
+const dlgTheme = $('#dlgTheme');
+let themeBackup = null, themeApplied = false;
+Object.entries(THEMES).forEach(([k, t]) => $('#thPresets').append(el('button', { type:'button', class:'th-preset', 'data-k':k, onclick:() => {
+  $('#thAccent').value = t.accent; $('#thHeader').value = t.header; $('#thDark').checked = !!t.dark; readTheme(k);
+} }, el('span', { class:'th-sw', style:`background:${t.accent}` }), t.name)));
+function openThemeDialog(){
+  themeBackup = structuredClone(theme); themeApplied = false;
+  $('#thAccent').value = theme.accent; $('#thHeader').value = theme.header; $('#thRadius').value = String(theme.radius ?? 10);
+  $('#thGlass').checked = !!theme.glass; $('#thDark').checked = !!theme.dark; $('#thTitle').value = theme.title || '';
+  $('#thTitle').placeholder = currentApp.name;
+  markPreset(theme.preset); dlgTheme.showModal();
+}
+function markPreset(k){ document.querySelectorAll('.th-preset').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.k === k))); }
+function readTheme(preset){
+  const accent = $('#thAccent').value;
+  const p = preset || (Object.entries(THEMES).find(([, t]) => t.accent === accent) || ['custom'])[0];
+  applyTheme({ preset: p, accent, header: $('#thHeader').value, radius: +$('#thRadius').value, glass: $('#thGlass').checked, dark: $('#thDark').checked, title: $('#thTitle').value.trim() });
+  markPreset(p); rerenderAll();
+}
+['#thAccent', '#thHeader', '#thRadius', '#thGlass', '#thDark', '#thTitle'].forEach(s => $(s).addEventListener('input', () => readTheme()));
+$('#btnThemeOk').addEventListener('click', () => { themeApplied = true; dlgTheme.close(); scheduleSave(); toast('Tema aplicado'); });
+dlgTheme.addEventListener('close', () => { if (!themeApplied){ applyTheme(themeBackup); rerenderAll(); } });
+$('#btnTheme').addEventListener('click', openThemeDialog);
 
 /* =================================================================
    Simbología: leyendas, menú de capa y editores
@@ -1311,7 +1939,7 @@ function renameLayer(lyr){
   d.addEventListener('close', () => {
     const v = $('#prInput').value.trim();
     if (d.returnValue !== 'ok' || !v || v === lyr.name) return;
-    lyr.name = v; renderLayers(); renderWidgets(); renderLayers(); toast('Nombre actualizado');
+    lyr.name = v; renderWidgets(); renderLayers(); scheduleSave(); toast('Nombre actualizado');
   }, { once:true });
   d.showModal(); setTimeout(() => $('#prInput').select(), 0);
 }
@@ -1597,6 +2225,7 @@ async function refreshDbLayer(lyr, quiet){
   try {
     const fc = await dbFetchFeatures(c, { table: lyr.db.table, filter: lyr.db.filter, max: lyr.db.max, geomCol: lyr.db.geomCol });
     lyr.group.clearLayers(); lyr.group.addData(fc); applyLabels(lyr);
+    applyLayerOrder();   // las entidades recargadas se dibujan al final: se restablece el orden
     fc.features.forEach(f => Object.keys(f.properties || {}).forEach(k => { if (!lyr.fields.includes(k)) lyr.fields.push(k); }));
     lyr.db.synced = Date.now(); lyr.db.status = null;
     if (!quiet) toast(`${lyr.name}: ${fmt.format(fc.features.length)} entidades desde ${c.name}`);
@@ -1721,40 +2350,52 @@ function deny(title, msg){
   $('#deniedTitle').textContent = title; $('#deniedMsg').textContent = msg;
   document.title = 'GeoTablero';
 }
-/* Guardar antes de salir de la página por los enlaces de la cabecera */
-async function leave(href){
-  if (canEdit()){ if (dirty) await saveNow(); else await saveViewOnly(); }
-  dirty = false; location.href = href;
+/* Al salir con cambios sin guardar se pregunta qué hacer */
+function askLeave(){
+  const d = $('#dlgLeave');
+  return new Promise(res => { d.returnValue = ''; d.addEventListener('close', () => res(d.returnValue || 'cancel'), { once:true }); d.showModal(); });
+}
+async function leave(href, logout){
+  if (currentApp && canEdit() && dirty){
+    const r = await askLeave();
+    if (r === 'cancel') return;
+    if (r === 'save' && !(await saveDraft(true))) return;
+  }
+  dirty = false;
+  if (logout) clearSession();
+  location.href = href;
 }
 ['#lnkHome', '#lnkApps'].forEach(s => $(s).addEventListener('click', e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); leave('index.html'); }));
-$('#btnLogout').addEventListener('click', async () => {
-  if (canEdit() && dirty) await saveNow();
-  dirty = false; clearSession(); location.href = 'index.html';
-});
-window.addEventListener('beforeunload', e => { if (currentApp && canEdit() && dirty){ saveNow(); e.preventDefault(); e.returnValue = ''; } });
-window.addEventListener('pagehide', () => { if (currentApp && canEdit() && !dirty) saveViewOnly(); });
+$('#btnLogout').addEventListener('click', () => leave('index.html', true));
+window.addEventListener('beforeunload', e => { if (currentApp && canEdit() && dirty){ e.preventDefault(); e.returnValue = ''; } });
 
 /* Si otra pestaña cierra la sesión o quita el acceso, esta lo detecta al volver */
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState !== 'visible' || !currentApp) return;
-  if (!getSession()){ if (dirty) await saveNow(); location.href = 'index.html?next=' + encodeURIComponent(appUrl(currentApp.id)); return; }
+  if (S.me && !getSession()){ if (dirty) await saveDraft(true); location.href = 'index.html?next=' + encodeURIComponent(appUrl(currentApp.id)); return; }
   await reloadStore();
   const a = S.apps.find(x => x.id === currentApp.id), r = roleFor(S.me, a);
   if (!a){ deny('Aplicación eliminada', 'Un administrador eliminó esta aplicación.'); currentApp = null; return; }
-  if (r !== role){ toast('Tu perfil en esta aplicación cambió. Se recargará la página.'); if (dirty && canEdit() && r && r !== 'viewer') await saveNow(); dirty = false; setTimeout(() => location.reload(), 1200); }
+  if (r !== role){ toast('Tu perfil en esta aplicación cambió. Se recargará la página.'); if (dirty && canEdit() && r && r !== 'viewer') await saveDraft(true); dirty = false; setTimeout(() => location.reload(), 1200); }
 });
 
 (async () => {
   const id = new URLSearchParams(location.search).get('app');
   await loadStore();
-  if (!S.me){
+  const a = id ? S.apps.find(x => x.id === id) : null;
+  // Sin sesión solo se pueden abrir aplicaciones públicas
+  if (!S.me && !(a && shareOf(a) === 'public')){
     location.replace('index.html' + (id ? '?next=' + encodeURIComponent(appUrl(id)) : ''));
     return;
   }
   paintWho();
   $('#nav').hidden = false;
+  if (!S.me){
+    document.querySelector('.who').hidden = true;
+    $('#lnkApps').hidden = true;
+    const login = $('#lnkLogin'); login.hidden = false; login.href = 'index.html?next=' + encodeURIComponent(appUrl(id));
+  }
   if (!id) return deny('Falta indicar la aplicación', 'Este enlace no dice qué aplicación abrir. Elige una desde el listado.');
-  const a = S.apps.find(x => x.id === id);
   if (!a) return deny('No encontramos esta aplicación', 'Puede que haya sido eliminada, o que exista en otro navegador. Las aplicaciones se guardan en cada navegador hasta que un administrador las publica en el repositorio.');
   const r = roleFor(S.me, a);
   if (!r) return deny('No tienes acceso a esta aplicación', `Tu usuario (${S.me.login}) no tiene un perfil asignado en "${a.name}". Pídele acceso a un administrador.`);
@@ -1762,14 +2403,21 @@ document.addEventListener('visibilitychange', async () => {
   currentApp = a; role = r; document.body.dataset.role = r;
   document.title = `${a.name} · GeoTablero`;
   $('#crumbName').textContent = a.name;
-  const cr = $('#crumbRole'); cr.className = 'role ' + r; cr.textContent = ROLE_NAME[r];
+  const cr = $('#crumbRole'); cr.className = 'role ' + r; cr.textContent = S.me ? ROLE_NAME[r] : 'Pública';
   $('#crumb').hidden = false; $('#coord').hidden = false; $('#extentWrap').hidden = false; $('#appTools').hidden = !canEdit();
-  $('#saveStatus').hidden = !canEdit(); setStatus('Guardado');
+  $('#saveStatus').hidden = !canEdit();
+  $('#btnShare').hidden = !canShare(S.me, a);
+  $('#btnShare').addEventListener('click', () => openShareDialog(currentApp));
+  paintCoordBtn();
   $('#vLoading').hidden = true; $('#vApp').hidden = false;
   map.invalidateSize();
-  const st = (await DB.get('app:' + a.id)) || emptyState();
-  await loadState(st);
+  // Editores y administradores abren el borrador, si existe; el resto, la versión publicada
+  const published = (await DB.get('app:' + a.id)) || emptyState();
+  const draft = canEdit() ? await DB.get('draft:' + a.id) : null;
+  hasDraft = !!draft;
+  await loadState(draft || published);
   await new Promise(res => setTimeout(res, 60));
-  clearTimeout(saveT); dirty = false; setStatus('Guardado');   // abrir no cuenta como modificación
+  dirty = false; updateSaveUI();   // abrir no cuenta como modificación
+  if (hasDraft) toast(`Abriste el borrador guardado ${whenTxt(a.draftAt)}. Publícalo cuando esté listo.`);
 })();
 })();
