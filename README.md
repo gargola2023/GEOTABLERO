@@ -165,6 +165,16 @@ Esta versión sirve para demostrar y validar el flujo, **no para proteger datos 
 
 Para uso real, el siguiente paso es conectar un servicio con autenticación y base de datos (por ejemplo, Supabase) que valide los permisos en el servidor.
 
+## Mapas base
+
+Los mapas base vienen de tres proveedores: CARTO (Calles, Claro, Oscuro), OpenStreetMap (el mapa estándar de openstreetmap.org) y Esri (Satelital, Satelital con nombres, Topográfico, Relieve, Gris). OpenStreetMap exige que la página se abra desde un sitio web, como GitHub Pages; abriendo el archivo con doble clic puede no cargar. Si uno no responde, GeoTablero cambia solo a otro proveedor y lo avisa; el botón del que falló queda marcado como "sin respuesta".
+
+Si **ninguno** carga:
+
+- Revisa la conexión a internet.
+- Algunas redes institucionales bloquean estos servidores. Desde un navegador de esa red, prueba abrir `https://a.basemaps.cartocdn.com/rastertiles/voyager/0/0/0.png` `https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/0/0/0` y `https://tile.openstreetmap.org/0/0/0.png`. Si no se ven, pide a soporte que habilite `*.basemaps.cartocdn.com`, `server.arcgisonline.com` y `tile.openstreetmap.org`.
+- Mientras tanto, puedes agregar como capa un servicio de mapas interno (WMS, XYZ o ArcGIS MapServer) desde **Capa → WMS / URL** o **ArcGIS Server**.
+
 ## Probar en tu computador
 
 Abrir `index.html` con doble clic funciona, pero algunos servicios (OpenStreetMap, ciertos ArcGIS) rechazan páginas abiertas como archivo local, y la carga de `data/geotablero.json` solo funciona desde un servidor. Para probar como en GitHub Pages:

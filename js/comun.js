@@ -154,7 +154,7 @@ const statsOf = st => {
 };
 const emptyWidgets = () => [
   { id:'W-layers', type:'layers', ax:'l', dx:56, ay:'t', dy:12, w:290, h:340 },
-  { id:'W-basemaps', type:'basemaps', ax:'l', dx:56, ay:'b', dy:28, w:290, h:250, min:true }
+  { id:'W-basemaps', type:'basemaps', ax:'l', dx:56, ay:'b', dy:28, w:290, h:348, min:true }
 ];
 function roughCenter(g){
   if (!g || !g.coordinates) return null;
@@ -198,7 +198,7 @@ function sampleState(){
     widgets: [
       { id:'W-title', type:'text', ax:'l', dx:56, ay:'t', dy:12, w:296, h:88, noHead:true, cfg:{ text:'**Región Metropolitana**\nPoblación comunal y zonas de trabajo', size:'m', align:'left' } },
       { id:'W-layers', type:'layers', ax:'l', dx:56, ay:'t', dy:112, w:296, h:300 },
-      { id:'W-basemaps', type:'basemaps', ax:'l', dx:56, ay:'b', dy:28, w:296, h:240, min:true },
+      { id:'W-basemaps', type:'basemaps', ax:'l', dx:56, ay:'b', dy:28, w:296, h:348, min:true },
       { id:'W-K1', type:'kpi', ax:'r', dx:540, ay:'t', dy:12, w:168, h:100, cfg:{ layerId:'Lcomunas', field:'poblacion', stat:'sum', unit:'hab', label:'Población total' } },
       { id:'W-K2', type:'kpi', ax:'r', dx:364, ay:'t', dy:12, w:168, h:100, cfg:{ layerId:'Lcomunas', field:'__count', stat:'count', unit:'', label:'Comunas' } },
       { id:'W-K3', type:'kpi', ax:'r', dx:188, ay:'t', dy:12, w:168, h:100, cfg:{ layerId:'Lzonas', field:'__area', stat:'sum', unit:'ha', label:'Superficie de zonas' } },

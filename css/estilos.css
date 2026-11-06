@@ -371,3 +371,7 @@ fieldset.sym-group legend{font:600 11px var(--f-body);letter-spacing:.06em;text-
 .leaflet-tooltip.gt-label.size-s{font-size:10px}
 .leaflet-tooltip.gt-label.size-l{font-size:14px}
 @media (max-width:560px){.grid3{grid-template-columns:1fr 1fr 1fr}dialog.dlg-side{margin:auto}}
+
+/* Mapas base más compactos para que quepan todos sin desplazarse */
+.wg-basemaps .bm .thumb{height:24px}
+.wg-basemaps .bm span{padding:4px 8px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

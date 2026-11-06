@@ -16,19 +16,23 @@ map.createPane('labels'); map.getPane('labels').style.zIndex = 450; map.getPane(
 const ESRI = s => `https://server.arcgisonline.com/ArcGIS/rest/services/${s}/MapServer/tile/{z}/{y}/{x}`;
 const BASEMAPS = [
   { id:'voyager', name:'Calles', url:'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', attr:'© OpenStreetMap © CARTO', native:20, sub:'abcd', thumb:'linear-gradient(135deg,#f5f3ee 40%,#a9d3e8 40% 55%,#d8ecc4 55%)' },
-  { id:'positron', name:'Claro', url:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', attr:'© OpenStreetMap © CARTO', native:20, sub:'abcd', thumb:'linear-gradient(135deg,#fafafa 50%,#e0e0e0 50% 60%,#d4dadc 60%)' },
-  { id:'dark', name:'Oscuro', url:'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', attr:'© OpenStreetMap © CARTO', native:20, sub:'abcd', thumb:'linear-gradient(135deg,#262626 50%,#3a3a3a 50% 60%,#1a1d21 60%)' },
+  { id:'osm', name:'OpenStreetMap', url:'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attr:'© OpenStreetMap', native:19, needsHttp:true, thumb:'linear-gradient(135deg,#f2efe9 40%,#aad3df 40% 55%,#c8e6a0 55%)' },
   { id:'sat', name:'Satelital', url:ESRI('World_Imagery'), attr:'© Esri, Maxar, Earthstar Geographics', native:18, thumb:'linear-gradient(135deg,#3d4a2f 30%,#6b6450 30% 55%,#2c3b3f 55%)' },
   { id:'hybrid', name:'Satelital con nombres', url:ESRI('World_Imagery'), labels:ESRI('Reference/World_Boundaries_and_Places'), attr:'© Esri, Maxar, Earthstar Geographics', native:18, thumb:'linear-gradient(135deg,#3d4a2f 30%,#6b6450 30% 55%,#2c3b3f 55%)' },
   { id:'topo', name:'Topográfico', url:ESRI('World_Topo_Map'), attr:'© Esri, HERE, Garmin, USGS', native:19, thumb:'linear-gradient(135deg,#efe9d8 45%,#c9dbb0 45% 70%,#b7d0e3 70%)' },
-  { id:'relief', name:'Relieve', url:ESRI('World_Shaded_Relief'), attr:'© Esri, USGS', native:13, thumb:'repeating-linear-gradient(160deg,#e8e4dc 0 6px,#cfc8bb 6px 7px)' },
+  { id:'positron', name:'Claro', url:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', attr:'© OpenStreetMap © CARTO', native:20, sub:'abcd', thumb:'linear-gradient(135deg,#fafafa 50%,#e0e0e0 50% 60%,#d4dadc 60%)' },
+  { id:'dark', name:'Oscuro', url:'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', attr:'© OpenStreetMap © CARTO', native:20, sub:'abcd', thumb:'linear-gradient(135deg,#262626 50%,#3a3a3a 50% 60%,#1a1d21 60%)' },
   { id:'gray', name:'Gris', url:ESRI('Canvas/World_Light_Gray_Base'), labels:ESRI('Canvas/World_Light_Gray_Reference'), attr:'© Esri, HERE, Garmin', native:16, thumb:'linear-gradient(135deg,#e6e6e6 50%,#d0d0d0 50%)' },
-  { id:'osm', name:'OpenStreetMap', url:'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attr:'© OpenStreetMap', native:19, needsHttp:true, thumb:'linear-gradient(135deg,#f2efe9 40%,#aad3df 40% 55%,#c8e6a0 55%)' },
+  { id:'relief', name:'Relieve', url:ESRI('World_Shaded_Relief'), attr:'© Esri, USGS', native:13, thumb:'repeating-linear-gradient(160deg,#e8e4dc 0 6px,#cfc8bb 6px 7px)' },
   { id:'none', name:'Sin mapa base', url:null, thumb:'repeating-conic-gradient(var(--surface-2) 0 25%, var(--line) 0 50%) 0 0/10px 10px' }
 ];
 let baseLayer = null, labelLayer = null, baseId = 'voyager';
-function setBasemap(id){
+/* Si un proveedor no responde, se prueba otro de una familia distinta (CARTO ↔ Esri ↔ OSM) */
+const BASEMAP_FALLBACK = { voyager:'topo', positron:'gray', dark:'gray', sat:'voyager', hybrid:'sat', topo:'voyager', relief:'topo', gray:'positron', osm:'voyager' };
+const failedBasemaps = new Set();
+function setBasemap(id, auto){
   const b = BASEMAPS.find(x => x.id === id) || BASEMAPS[0];
+  if (!auto) failedBasemaps.clear();
   if (baseLayer) map.removeLayer(baseLayer);
   if (labelLayer) map.removeLayer(labelLayer);
   baseLayer = labelLayer = null;
@@ -39,21 +43,29 @@ function setBasemap(id){
     if (b.labels) labelLayer = L.tileLayer(b.labels, { ...opts, attribution: '', pane: 'labels' }).addTo(map);
     let ok = 0, bad = 0, warned = false;
     baseLayer.on('tileload', () => { ok++; if (btn) btn.classList.remove('bm-fail'); });
+    const thisLayer = baseLayer;
     baseLayer.on('tileerror', () => {
       bad++;
-      if (!warned && bad >= 6 && ok === 0){
-        warned = true; if (btn) btn.classList.add('bm-fail');
+      if (warned || bad < 6 || ok > 0 || baseLayer !== thisLayer) return;
+      warned = true; failedBasemaps.add(b.id);
+      const mark = document.querySelector(`.bm[data-id="${b.id}"]`); if (mark) mark.classList.add('bm-fail');
+      const alt = [BASEMAP_FALLBACK[b.id], 'voyager', 'topo', 'osm'].find(x => x && !failedBasemaps.has(x));
+      if (alt){
+        const altName = BASEMAPS.find(x => x.id === alt).name;
         toast(b.needsHttp && location.protocol === 'file:'
-          ? `${b.name} bloquea páginas abiertas como archivo local. Usa otro mapa base o abre la app desde un servidor (GitHub Pages).`
-          : `${b.name} no está respondiendo. Prueba con otro mapa base.`);
+          ? `${b.name} bloquea páginas abiertas como archivo local; se cambió a ${altName}.`
+          : `${b.name} no respondió; se cambió a ${altName}.`);
+        setBasemap(alt, true);
+      } else {
+        toast('Ningún mapa base responde. Revisa la conexión a internet, o si tu red bloquea estos servidores (ver README, sección Mapas base).');
       }
     });
   }
   baseId = b.id;
   document.querySelectorAll('.bm').forEach(n => n.setAttribute('aria-pressed', n.dataset.id === b.id));
 }
-function renderBasemapButtons(){
-  const box = $('#basemaps'); if (!box) return;
+function renderBasemapButtons(container){
+  const box = container || $('#basemaps'); if (!box) return;
   box.innerHTML = '';
   BASEMAPS.forEach(b => box.append(el('button', { class:'bm', 'data-id':b.id, 'aria-pressed': String(b.id === baseId), onclick:() => { setBasemap(b.id); scheduleSave(); } }, el('div', { class:'thumb', style:`background:${b.thumb}` }), el('span', {}, b.name))));
 }
@@ -456,7 +468,7 @@ const runtimeMin = new Map();   // minimizado solo durante esta visita
 let design = false;
 const WTYPE = {
   layers:   { name:'Capas',     w:290, h:340, minW:220, minH:140, single:true },
-  basemaps: { name:'Mapa base', w:290, h:250, minW:200, minH:120, single:true },
+  basemaps: { name:'Mapa base', w:290, h:348, minW:200, minH:120, single:true },
   kpi:      { name:'Indicador', w:184, h:112, minW:140, minH:88 },
   chart:    { name:'Gráfico',   w:352, h:284, minW:240, minH:180 },
   text:     { name:'Texto',     w:320, h:104, minW:140, minH:48 },
@@ -473,7 +485,7 @@ const widgetTitle = w => w.type === 'kpi' ? (w.cfg.label || 'Indicador') : w.typ
 function defaultWidgets(st){
   const out = [
     { id:'W-layers', type:'layers', ax:'l', dx:56, ay:'t', dy:12, w:290, h:340 },
-    { id:'W-basemaps', type:'basemaps', ax:'l', dx:56, ay:'b', dy:28, w:290, h:250, min:true }
+    { id:'W-basemaps', type:'basemaps', ax:'l', dx:56, ay:'b', dy:28, w:290, h:348, min:true }
   ];
   const ks = st.kpis || [], cs = st.charts || [];
   ks.forEach((k, i) => out.push({ id:'W-' + k.id, type:'kpi', ax:'r', dx: 12 + (3 - i % 4) * 176, ay:'t', dy: 12 + Math.floor(i / 4) * 108, w:168, h:100,
@@ -585,11 +597,13 @@ function mountBody(w, body){
       el('ul', { class:'layers', id:'layerList' }),
       el('div', { class:'hint', id:'editHint' }));
   } else if (w.type === 'basemaps'){
-    body.append(el('div', { class:'basemaps', id:'basemaps' }));
-    renderBasemapButtons();
+    const grid = el('div', { class:'basemaps', id:'basemaps' });
+    body.append(grid);
+    renderBasemapButtons(grid);   // el widget aún no está en la página: se le pasa su propio contenedor
   } else if (w.type === 'legend'){
-    body.append(el('div', { class:'legend-box', id:'legendBox' }));
-    setTimeout(renderLegend, 0);
+    const lb = el('div', { class:'legend-box', id:'legendBox' });
+    body.append(lb);
+    renderLegend(lb);
   } else if (w.type === 'kpi'){
     body.append(el('div', { class:'k-val' }), el('div', { class:'k-sub' }));
   } else if (w.type === 'chart'){
@@ -808,6 +822,7 @@ async function loadState(st){
     }
     colorIdx = layers.length;
     widgets = Array.isArray(st.widgets) ? structuredClone(st.widgets) : defaultWidgets(st);
+    widgets.forEach(w => { if (w.type === 'basemaps' && (w.h === 250 || w.h === 240 || w.h === 340)) w.h = 348; });   // tamaño anterior por defecto: no cabían todos
     if (st.view) map.setView(st.view.center, st.view.zoom, { animate:false });
     if (canEdit()) targetId = (layers.slice().reverse().find(l => l.editable) || {}).id || null;
     layers.forEach(l => l.kind === 'vector' && l.group.eachLayer(f => { f.options.pmIgnore = !editAllowed(l); }));
@@ -1245,8 +1260,8 @@ function rasterLegend(lyr){
     el('div', { class:'ml-ends' }, el('span', {}, 'Sin vegetación'), el('span', {}, 'Vegetación densa')));
 }
 /* Widget Leyenda: capas visibles, en el orden del mapa */
-function renderLegend(){
-  const box = $('#legendBox'); if (!box) return;
+function renderLegend(container){
+  const box = container || $('#legendBox'); if (!box) return;
   box.innerHTML = '';
   const vis = [...layers].reverse().filter(l => l.visible);
   if (!vis.length){ box.append(el('div', { class:'ml-more' }, 'No hay capas visibles.')); return; }
